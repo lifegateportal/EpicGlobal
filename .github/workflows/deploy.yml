@@ -32,6 +32,7 @@ jobs:
       - name: Deploy to Server via SSH
         uses: easingthemes/ssh-deploy@main
         env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE: true
           SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
           REMOTE_HOST: ${{ secrets.SERVER_IP }}
           REMOTE_USER: root
