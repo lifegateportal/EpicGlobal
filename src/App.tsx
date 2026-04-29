@@ -28,7 +28,12 @@ export default function App() {
     if (!isAuthenticated) return;
 
     // REPLACE THIS WITH YOUR DIGITALOCEAN IP
-    const socket = io('https://angrily-dust-antonym.ngrok-free.dev/'); 
+     const socket = io('https://angrily-dust-antonym.ngrok-free.dev/', {
+  transports: ['websocket'], // Forces raw WebSockets, bypassing HTTP polling
+  extraHeaders: {
+    "ngrok-skip-browser-warning": "true" // Tells Ngrok to disable the warning page
+  }
+});
 
     socket.on('connect', () => {
       setServerConnected(true);
