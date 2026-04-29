@@ -1,0 +1,11 @@
+app.yourdomain.com {
+    root * /var/www/myapp/dist
+    
+    # Enable HTML5 history mode for React/Vite routing
+    try_files {path} /index.html
+    
+    file_server
+    
+    # Compress responses to save bandwidth
+    encode gzip zstd
+}
