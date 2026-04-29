@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ExternalLink, Lock, Loader2 } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { io } from 'socket.io-client';
 import { Navbar } from './components/Navbar';
@@ -44,7 +44,6 @@ export default function App() {
     socket.on('system_metrics', (data) => {
       setPerformanceData(prev => {
         const newData = [...prev, { time: data.time, cpu: data.cpu, ram: data.ram }];
-        // Keep the chart flowing by removing old data points (max 15 visible)
         if (newData.length > 15) newData.shift();
         return newData;
       });
@@ -106,7 +105,6 @@ export default function App() {
     );
   }
 
-  // Inject bundle sizes into mock data
   const deployments = [
     { id: '1', status: 'ready', branch: 'main', time: '2m', commit: 'Update routing logic', hash: 'a1b2c3d', duration: '45s', bundleSize: 2.1 },
     { id: '2', status: 'building', branch: 'feature/auth', time: 'Just now', commit: 'Import massive legacy package', hash: 'e5f6g7h', duration: '--', bundleSize: 5.4 },
@@ -138,17 +136,23 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex gap-6 border-b border-zinc-800/60 mb-8 overflow-x-auto hide-scrollbar">
-          {['overview', 'deployments', 'settings'].map((tab, idx) => (
-            <button key={tab} onClick={() => handleTabSwitch(tab)} className={`pb-3 text-sm font-medium capitalize transition-colors relative flex items-center gap-2 ${activeTab === tab ? 'text-zinc-100' : 'text-zinc-500'}`}>
+        <div className="flex gap-4 border-b border-zinc-800/60 mb-8">
+          {['overview', 'deployments', 'settings'].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => handleTabSwitch(tab)}
+              className={`pb-3 text-sm font-medium capitalize transition-colors ${
+                activeTab === tab
+                  ? 'text-zinc-100 border-b-2 border-white'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
               {tab}
-              <span className="hidden md:flex items-center justify-center w-4 h-4 rounded text-[9px] border border-zinc-800 bg-zinc-900/50 font-mono text-zinc-500">{idx + 1}</span>
-              {activeTab === tab && <span className="absolute bottom-[-1px] left-0 w-full h-[2px] bg-white rounded-t-full"></span>}
             </button>
           ))}
         </div>
 
-        <div className={`transition-opacity duration-300 ${isNavigating ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+        <div className={`transition-opacity duration-300 ${isNavigating ? 'opacity-0' : 'opacity-100'}`}>
           {activeTab === 'overview' && <OverviewTab performanceData={performanceData} />}
           {activeTab === 'deployments' && <DeploymentsTab deployments={deployments} />}
           {activeTab === 'settings' && <SettingsTab />}

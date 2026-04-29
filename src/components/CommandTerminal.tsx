@@ -43,7 +43,6 @@ export function CommandTerminal({ isOpen, onClose }: { isOpen: boolean, onClose:
     if (log.toLowerCase().includes('error')) return <span className="text-red-400">{log}</span>;
     if (log.includes('[agent]')) return <span className="text-purple-400">{log}</span>;
     if (log.includes('/src/')) {
-      const parts = log.split('(/src/[^\\s]+)g');
       return <span>{log.replace(/(\/src\/[\w./-]+)/g, (match) => `<span class="text-blue-400 underline cursor-pointer">${match}</span>`)}</span>;
     }
     return <span>{log}</span>;

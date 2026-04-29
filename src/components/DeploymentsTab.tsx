@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle2, Clock, GitBranch, MoreVertical, Search, RotateCcw, TerminalSquare, Check, Copy } from 'lucide-react';
+import { CheckCircle2, Clock, GitBranch, MoreVertical, Search, Check, Copy } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 
@@ -24,7 +24,7 @@ export function DeploymentsTab({ deployments }: { deployments: any[] }) {
       </div>
       <div className="divide-y divide-zinc-800/60 overflow-hidden">
         {deployments.map((deploy) => {
-          const isLargeBundle = deploy.bundleSize > 4; // Mock logic: > 4MB triggers warning
+          const isLargeBundle = deploy.bundleSize > 4;
           
           return (
             <motion.div key={deploy.id} className="p-4 flex items-center justify-between bg-[#0A0A0A] hover:bg-zinc-900/40 transition-colors">
@@ -45,7 +45,6 @@ export function DeploymentsTab({ deployments }: { deployments: any[] }) {
               </div>
               
               <div className="flex items-center gap-6">
-                {/* Bundle Size Visualizer */}
                 <div className="hidden md:flex flex-col items-end gap-1" title={`Bundle Size: ${deploy.bundleSize}MB`}>
                   <div className="w-16 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                     <div className={`h-full ${isLargeBundle ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${(deploy.bundleSize / 6) * 100}%` }}></div>
