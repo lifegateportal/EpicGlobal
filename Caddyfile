@@ -1,11 +1,19 @@
 epicglobal.app {
     root * /var/www/myapp/dist
-    
-    # Enable HTML5 history mode for React/Vite routing
-    try_files {path} /index.html
-    
-    file_server
-    
+
+    # Serve compiled assets as static files only.
+    # Missing assets should return 404 instead of index.html.
+    @assets path /assets/*
+    handle @assets {
+        file_server
+    }
+
+    # Enable HTML5 history mode for app routes.
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
+
     # Compress responses to save bandwidth
     encode gzip zstd
 }
