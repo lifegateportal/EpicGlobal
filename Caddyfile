@@ -1,4 +1,4 @@
-app.yourdomain.com {
+epicglobal.app {
     root * /var/www/myapp/dist
     
     # Enable HTML5 history mode for React/Vite routing

@@ -115,8 +115,9 @@ function App() {
 
       <div className="ticks"></div>
       <section id="spacer"></section>
+      <h1>{import.meta.env.VITE_TEST_MESSAGE}</h1>
     </>
   )
 }
 
-export default App
+export default App                           

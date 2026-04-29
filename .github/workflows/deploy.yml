@@ -1,1 +1,40 @@
-name:%20Deploy%20Frontend%0A%0Aon%3A%0A%20%20push%3A%0A%20%20%20%20branches%3A%0A%20%20%20%20%20%20-%20main%0A%0Ajobs%3A%0A%20%20build-and-deploy%3A%0A%20%20%20%20runs-on%3A%20ubuntu-latest%0A%0A%20%20%20%20steps%3A%0A%20%20%20%20%20%20-%20name%3A%20Checkout%20Code%0A%20%20%20%20%20%20%20%20uses%3A%20actions/checkout@v4%0A%0A%20%20%20%20%20%20-%20name:%20Setup%20Node.js%0A%20%20%20%20%20%20%20%20uses:%20actions/setup-node@v4%0A%20%20%20%20%20%20%20%20with:%0A%20%20%20%20%20%20%20%20%20%20node-version:%20'20'%0A%0A%20%20%20%20%20%20-%20name:%20Install%20Dependencies%0A%20%20%20%20%20%20%20%20run:%20npm%20install%0A%0A%20%20%20%20%20%20-%20name:%20Build%20Vite%20App%0A%20%20%20%20%20%20%20%20run:%20npm%20run%20build%0A%0A%20%20%20%20%20%20-%20name:%20Deploy%20to%20Server%20via%20SSH%0A%20%20%20%20%20%20%20%20uses:%20easingthemes/ssh-deploy@main%0A%20%20%20%20%20%20%20%20env:%0A%20%20%20%20%20%20%20%20%20%20SSH_PRIVATE_KEY:%20$%7B%7B%20secrets.SERVER_SSH_KEY%20%7D%7D%0A%20%20%20%20%20%20%20%20%20%20REMOTE_HOST:%20$%7B%7B%20secrets.SERVER_IP%20%7D%7D%0A%20%20%20%20%20%20%20%20%20%20REMOTE_USER:%20deploy_user%0A%20%20%20%20%20%20%20%20%20%20TARGET:%20/var/www/myapp/dist/%0A%20%20%20%20%20%20%20%20%20%20SOURCE:%20%22dist/%22%0A%20%20%20%20%20%20%20%20%20%20%23%20The%20ARGS%20below%20enforce%20immutable%20configuration%20state.%20%0A%20%20%20%20%20%20%20%20%20%20%23%20It%20only%20updates%20frontend%20assets%20and%20prevents%20the%20deletion%20or%20modification%20%0A%20%20%20%20%20%20%20%20%20%20%23%20of%20core%20API%20settings,%20.env%20files,%20or%20server%20configurations.%0A%20%20%20%20%20%20%20%20%20%20ARGS:%20%22-rlgoDzvc%20-i%20--delete-after%20--exclude='.env'%20--exclude='api_config.json'%22
+name: Deploy Frontend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm install
+
+      # This creates the .env file on the runner using your GitHub Secrets
+      - name: Inject Production Variables
+        run: |
+          echo "VITE_TEST_MESSAGE=${{ secrets.VITE_TEST_MESSAGE }}" >> .env
+
+      - name: Build Vite App
+        run: npm run build
+
+      - name: Deploy to Server via SSH
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_USER: root
+          TARGET: /var/www/myapp/dist/
+          SOURCE: "dist/"
+          ARGS: "-rlgoDzvc -i --delete-after --exclude='.env' --exclude='api_config.json'"
