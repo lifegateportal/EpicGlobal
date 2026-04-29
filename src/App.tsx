@@ -1,4 +1,4 @@
-import { GitBranch, Globe, Server, CheckCircle2, Clock, Terminal, ExternalLink } from 'lucide-react';
+import { GitBranch, Server, CheckCircle2, Clock, Terminal, ExternalLink } from 'lucide-react';
 
 export default function App() {
   const deployments = [
