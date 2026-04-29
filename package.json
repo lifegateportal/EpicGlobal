@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@xyflow/react": "^12.10.2",
     "cmdk": "^1.1.1",
     "firebase": "^12.12.1",
     "framer-motion": "^12.38.0",
