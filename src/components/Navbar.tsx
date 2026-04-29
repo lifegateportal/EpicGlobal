@@ -1,6 +1,6 @@
-import { ChevronDown, Wifi } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 
-export function Navbar() {
+export function Navbar({ serverConnected = false }: { serverConnected?: boolean }) {
   return (
     <nav className="sticky top-0 z-50 border-b border-zinc-800/60 bg-black/80 backdrop-blur-md">
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -10,7 +10,6 @@ export function Navbar() {
             <span className="text-zinc-100 font-medium tracking-tight ml-1 cursor-pointer">EpicGlobal</span>
             <span className="text-zinc-600 font-light text-xl mb-1 mx-1">/</span>
             
-            {/* Upgrade 5: Project Context Switcher */}
             <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-zinc-900/80 rounded-md cursor-pointer transition-colors group">
               <span className="text-zinc-100 font-medium tracking-tight">epicglobal.app</span>
               <ChevronDown size={14} className="text-zinc-500 group-hover:text-zinc-300 transition-colors" />
@@ -19,13 +18,13 @@ export function Navbar() {
         </div>
         
         <div className="flex items-center gap-4">
-          {/* Upgrade 4: Global WebSocket Pulse */}
+          {/* Dynamic WebSocket Pulse */}
           <div className="hidden md:flex items-center gap-2 text-xs font-medium text-zinc-500 mr-2">
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+              {serverConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${serverConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
             </span>
-            Connected
+            {serverConnected ? 'Connected' : 'Disconnected'}
           </div>
           
           <button className="text-sm font-medium text-zinc-400 hover:text-zinc-100 transition-colors">Feedback</button>
