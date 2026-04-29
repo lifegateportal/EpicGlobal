@@ -28,7 +28,7 @@ export default function App() {
     if (!isAuthenticated) return;
 
     // REPLACE THIS WITH YOUR DIGITALOCEAN IP
-    const socket = io('http://178.128.158.90:4000'); 
+    const socket = io('https://angrily-dust-antonym.ngrok-free.dev/'); 
 
     socket.on('connect', () => {
       setServerConnected(true);
