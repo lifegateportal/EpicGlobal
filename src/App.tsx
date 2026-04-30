@@ -76,7 +76,7 @@ export default function App() {
     // Catch the live stream and feed the chart
     socket.on('telemetry', (data) => {
       setPerformanceData(prev => {
-        const newData = [...prev, { time: data.time, cpu: data.cpu, ram: data.ram }];
+        const newData = [...prev, { time: data.timestamp, cpu: data.cpu, ram: data.ram }];
         if (newData.length > 15) newData.shift();
         return newData;
       });
