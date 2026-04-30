@@ -10,15 +10,20 @@ import { CommandTerminal } from './components/CommandTerminal';
 import { CommandPalette } from './components/CommandPalette';
 import { KeyboardHUD } from './components/KeyboardHUD';
 
+const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const socketUrl = configuredSocketUrl || window.location.origin;
   
   // LIVE TELEMETRY STATE
   const [serverConnected, setServerConnected] = useState(false);
+  const [connectionStatusLabel, setConnectionStatusLabel] = useState('Disconnected');
+  const [connectionStatusDetail, setConnectionStatusDetail] = useState(`Telemetry endpoint: ${socketUrl}`);
   const [performanceData, setPerformanceData] = useState<{time: string, cpu: number, ram: number}[]>([
     { time: '00:00', cpu: 0, ram: 0 }
   ]);
@@ -27,22 +32,45 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    // REPLACE THIS WITH YOUR DIGITALOCEAN IP
-     const socket = io('https://angrily-dust-antonym.ngrok-free.dev/', {
-  transports: ['websocket'], // Forces raw WebSockets, bypassing HTTP polling
-  extraHeaders: {
-    "ngrok-skip-browser-warning": "true" // Tells Ngrok to disable the warning page
-  }
-});
+    let hasShownConnectError = false;
+    setConnectionStatusLabel('Connecting');
+    setConnectionStatusDetail(`Connecting to ${socketUrl}`);
+
+    const socket = io(socketUrl, {
+      transports: ['websocket'],
+      timeout: 10000,
+    });
 
     socket.on('connect', () => {
       setServerConnected(true);
+      setConnectionStatusLabel('Connected');
+      setConnectionStatusDetail(`Connected to ${socketUrl}`);
       toast.success('Secure link established to nyc-1.');
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       setServerConnected(false);
-      toast.error('Connection to nyc-1 lost.');
+      setConnectionStatusLabel('Disconnected');
+      setConnectionStatusDetail(`Socket closed: ${reason}`);
+      toast.error(`Connection to nyc-1 lost: ${reason}.`);
+    });
+
+    socket.on('connect_error', (error) => {
+      const message = error.message || 'Unknown connection error';
+      setServerConnected(false);
+      setConnectionStatusLabel('Disconnected');
+      setConnectionStatusDetail(`Unable to reach ${socketUrl}: ${message}`);
+      console.error('Socket connection failed', { socketUrl, message, error });
+
+      if (!hasShownConnectError) {
+        toast.error(`Telemetry unavailable: ${message}.`);
+        hasShownConnectError = true;
+      }
+    });
+
+    socket.io.on('reconnect_attempt', (attempt) => {
+      setConnectionStatusLabel('Connecting');
+      setConnectionStatusDetail(`Retrying ${socketUrl} (attempt ${attempt})`);
     });
 
     // Catch the live stream and feed the chart
@@ -57,7 +85,7 @@ export default function App() {
     return () => {
       socket.disconnect();
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, socketUrl]);
 
   // Local-First Cache Simulation & Focus Throttling
   useEffect(() => {
@@ -122,7 +150,11 @@ export default function App() {
       <CommandPalette setTab={handleTabSwitch} openTerminal={() => setIsTerminalOpen(true)} />
       <CommandTerminal isOpen={isTerminalOpen} onClose={() => setIsTerminalOpen(false)} />
 
-      <Navbar serverConnected={serverConnected} />
+      <Navbar
+        serverConnected={serverConnected}
+        connectionStatusLabel={connectionStatusLabel}
+        connectionStatusDetail={connectionStatusDetail}
+      />
 
       {isOffline && (
         <div className="bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-500 text-xs font-medium py-2 px-6 flex items-center justify-center gap-3">
@@ -158,7 +190,13 @@ export default function App() {
         </div>
 
         <div className={`transition-opacity duration-300 ${isNavigating ? 'opacity-0' : 'opacity-100'}`}>
-          {activeTab === 'overview' && <OverviewTab performanceData={performanceData} />}
+          {activeTab === 'overview' && (
+            <OverviewTab
+              performanceData={performanceData}
+              serverConnected={serverConnected}
+              connectionStatusDetail={connectionStatusDetail}
+            />
+          )}
           {activeTab === 'deployments' && <DeploymentsTab deployments={deployments} />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>

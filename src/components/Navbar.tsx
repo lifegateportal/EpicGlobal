@@ -1,6 +1,16 @@
 import { ChevronDown } from 'lucide-react';
 
-export function Navbar({ serverConnected = false }: { serverConnected?: boolean }) {
+type NavbarProps = {
+  serverConnected?: boolean;
+  connectionStatusLabel?: string;
+  connectionStatusDetail?: string;
+};
+
+export function Navbar({
+  serverConnected = false,
+  connectionStatusLabel = 'Disconnected',
+  connectionStatusDetail,
+}: NavbarProps) {
   return (
     <nav className="sticky top-0 z-50 border-b border-zinc-800/60 bg-black/80 backdrop-blur-md">
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -18,13 +28,15 @@ export function Navbar({ serverConnected = false }: { serverConnected?: boolean 
         </div>
         
         <div className="flex items-center gap-4">
-          {/* Dynamic WebSocket Pulse */}
-          <div className="hidden md:flex items-center gap-2 text-xs font-medium text-zinc-500 mr-2">
+          <div
+            className="hidden md:flex items-center gap-2 text-xs font-medium text-zinc-500 mr-2"
+            title={connectionStatusDetail}
+          >
             <span className="relative flex h-2 w-2">
               {serverConnected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>}
               <span className={`relative inline-flex rounded-full h-2 w-2 ${serverConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
             </span>
-            {serverConnected ? 'Connected' : 'Disconnected'}
+            {connectionStatusLabel}
           </div>
           
           <button className="text-sm font-medium text-zinc-400 hover:text-zinc-100 transition-colors">Feedback</button>
