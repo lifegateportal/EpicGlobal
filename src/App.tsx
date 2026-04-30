@@ -9,7 +9,8 @@ import { SettingsTab } from './components/SettingsTab';
 import { CommandTerminal } from './components/CommandTerminal';
 import { CommandPalette } from './components/CommandPalette';
 import { KeyboardHUD } from './components/KeyboardHUD';
-import DeploymentDashboard from './components/DeploymentDashboard'; // Newly added Vercel-style deployment UI
+import DeploymentDashboard from './components/DeploymentDashboard';
+import BackendManager from './components/BackendManager';
 
 const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 
@@ -109,14 +110,15 @@ export default function App() {
     };
   }, []);
 
-  // Updated Keyboard Shortcuts to include the new Edge tab
+  // Updated Keyboard Shortcuts to include the new Orchestrator tab
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === '1') handleTabSwitch('overview');
       if (e.key === '2') handleTabSwitch('deployments');
       if (e.key === '3') handleTabSwitch('edge');
-      if (e.key === '4') handleTabSwitch('settings');
+      if (e.key === '4') handleTabSwitch('orchestrator');
+      if (e.key === '5') handleTabSwitch('settings');
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -144,6 +146,15 @@ export default function App() {
   const deployments = [
     { id: '1', status: 'ready', branch: 'main', time: '2m', commit: 'Update routing logic', hash: 'a1b2c3d', duration: '45s', bundleSize: 2.1 },
     { id: '2', status: 'building', branch: 'feature/auth', time: 'Just now', commit: 'Import massive legacy package', hash: 'e5f6g7h', duration: '--', bundleSize: 5.4 },
+  ];
+
+  // Structured Tab Array for cleaner rendering and custom labels
+  const navTabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'deployments', label: 'Deployments' },
+    { id: 'edge', label: 'Edge' },
+    { id: 'orchestrator', label: 'Backend Orchestrator' },
+    { id: 'settings', label: 'Settings' }
   ];
 
   return (
@@ -176,19 +187,19 @@ export default function App() {
           </div>
         </div>
 
-        {/* Updated Tab Navigation Array */}
-        <div className="flex gap-4 border-b border-zinc-800/60 mb-8">
-          {['overview', 'deployments', 'edge', 'settings'].map((tab) => (
+        {/* Updated Tab Navigation Rendering */}
+        <div className="flex gap-6 border-b border-zinc-800/60 mb-8 overflow-x-auto whitespace-nowrap">
+          {navTabs.map((tab) => (
             <button
-              key={tab}
-              onClick={() => handleTabSwitch(tab)}
-              className={`pb-3 text-sm font-medium capitalize transition-colors ${
-                activeTab === tab
+              key={tab.id}
+              onClick={() => handleTabSwitch(tab.id)}
+              className={`pb-3 text-sm font-medium transition-colors ${
+                activeTab === tab.id
                   ? 'text-zinc-100 border-b-2 border-white'
                   : 'text-zinc-500 hover:text-zinc-300'
               }`}
             >
-              {tab}
+              {tab.label}
             </button>
           ))}
         </div>
@@ -202,8 +213,9 @@ export default function App() {
             />
           )}
           {activeTab === 'deployments' && <DeploymentsTab deployments={deployments} />}
-          {/* Renders the newly injected Vercel-style deployment engine */}
           {activeTab === 'edge' && <DeploymentDashboard />}
+          {/* Injecting the new God-Mode Engine Panel */}
+          {activeTab === 'orchestrator' && <BackendManager />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
       </main>
