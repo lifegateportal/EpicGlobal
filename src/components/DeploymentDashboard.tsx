@@ -1,0 +1,165 @@
+import React, { useState } from 'react';
+
+export default function DeploymentDashboard() {
+  const [formData, setFormData] = useState({
+    projectName: '',
+    githubUser: 'lifegateportal',
+    githubRepo: '',
+    targetBranch: 'main'
+  });
+  
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [resultUrl, setResultUrl] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handleDeploy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setStatus('loading');
+    setErrorMessage('');
+
+    try {
+      // Automatically routes to your live backend or localhost depending on the environment
+      const baseUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+      const endpoint = `${baseUrl}/api/deploy`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to trigger edge deployment.');
+      }
+
+      setResultUrl(data.projectUrl);
+      setStatus('success');
+      
+      // Reset form fields for the next deployment
+      setFormData({ ...formData, projectName: '', githubRepo: '' });
+
+    } catch (error: any) {
+      console.error('[Deploy Error]', error);
+      setErrorMessage(error.message);
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 bg-[#0E1117] text-white rounded-xl shadow-2xl border border-gray-800 font-sans">
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold mb-2 flex items-center gap-2">
+          <svg className="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          Deploy to Edge
+        </h2>
+        <p className="text-gray-400 text-sm">Provision a new high-performance project directly to the global network.</p>
+      </div>
+
+      <form onSubmit={handleDeploy} className="space-y-5">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1">Project Name</label>
+            <input
+              type="text"
+              name="projectName"
+              value={formData.projectName}
+              onChange={handleChange}
+              placeholder="e.g., my-awesome-app"
+              required
+              className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1">Target Branch</label>
+            <input
+              type="text"
+              name="targetBranch"
+              value={formData.targetBranch}
+              onChange={handleChange}
+              placeholder="main"
+              required
+              className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1">GitHub Username</label>
+            <input
+              type="text"
+              name="githubUser"
+              value={formData.githubUser}
+              onChange={handleChange}
+              required
+              className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-400 mb-1">Repository Name</label>
+            <input
+              type="text"
+              name="githubRepo"
+              value={formData.githubRepo}
+              onChange={handleChange}
+              placeholder="e.g., EpicGlobal"
+              required
+              className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors"
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={status === 'loading'}
+          className={`w-full py-3 px-4 mt-4 rounded-lg font-medium transition-all ${
+            status === 'loading'
+              ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed'
+              : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg hover:shadow-blue-500/20'
+          }`}
+        >
+          {status === 'loading' ? (
+            <span className="flex items-center justify-center gap-2">
+              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+              Provisioning Edge Infrastructure...
+            </span>
+          ) : (
+            'Deploy to Edge'
+          )}
+        </button>
+      </form>
+
+      {/* Status Feedback Banners */}
+      {status === 'error' && (
+        <div className="mt-6 p-4 bg-red-500/10 border border-red-500/50 rounded-lg flex items-start gap-3">
+          <svg className="w-5 h-5 text-red-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <div>
+            <h4 className="text-red-400 font-medium">Deployment Failed</h4>
+            <p className="text-red-300 text-sm mt-1">{errorMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {status === 'success' && (
+        <div className="mt-6 p-4 bg-green-500/10 border border-green-500/50 rounded-lg flex items-start gap-3">
+          <svg className="w-5 h-5 text-green-500 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <div className="w-full">
+            <h4 className="text-green-400 font-medium">Platform Provisioned</h4>
+            <p className="text-green-300/80 text-sm mt-1 mb-2">Your edge network environment is building. It will be live shortly at:</p>
+            <a href={resultUrl} target="_blank" rel="noopener noreferrer" className="block w-full bg-[#0E1117] text-blue-400 border border-green-500/30 rounded px-3 py-2 text-sm hover:text-blue-300 hover:border-green-500/50 transition-colors truncate">
+              {resultUrl}
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

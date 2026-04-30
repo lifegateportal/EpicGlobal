@@ -9,6 +9,7 @@ import { SettingsTab } from './components/SettingsTab';
 import { CommandTerminal } from './components/CommandTerminal';
 import { CommandPalette } from './components/CommandPalette';
 import { KeyboardHUD } from './components/KeyboardHUD';
+import DeploymentDashboard from './components/DeploymentDashboard'; // Newly added Vercel-style deployment UI
 
 const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 
@@ -108,12 +109,14 @@ export default function App() {
     };
   }, []);
 
+  // Updated Keyboard Shortcuts to include the new Edge tab
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === '1') handleTabSwitch('overview');
       if (e.key === '2') handleTabSwitch('deployments');
-      if (e.key === '3') handleTabSwitch('settings');
+      if (e.key === '3') handleTabSwitch('edge');
+      if (e.key === '4') handleTabSwitch('settings');
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -173,8 +176,9 @@ export default function App() {
           </div>
         </div>
 
+        {/* Updated Tab Navigation Array */}
         <div className="flex gap-4 border-b border-zinc-800/60 mb-8">
-          {['overview', 'deployments', 'settings'].map((tab) => (
+          {['overview', 'deployments', 'edge', 'settings'].map((tab) => (
             <button
               key={tab}
               onClick={() => handleTabSwitch(tab)}
@@ -198,6 +202,8 @@ export default function App() {
             />
           )}
           {activeTab === 'deployments' && <DeploymentsTab deployments={deployments} />}
+          {/* Renders the newly injected Vercel-style deployment engine */}
+          {activeTab === 'edge' && <DeploymentDashboard />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
       </main>
