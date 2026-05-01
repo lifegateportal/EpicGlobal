@@ -13,9 +13,14 @@ import DeploymentDashboard from './components/DeploymentDashboard';
 import BackendManager from './components/BackendManager';
 
 const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
+const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return sessionStorage.getItem('eg_auth') === 'true';
+  });
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authError, setAuthError] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -132,12 +137,38 @@ export default function App() {
   };
 
   if (!isAuthenticated) {
+    const handleAuth = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (passwordInput === AUTH_PASSWORD) {
+        sessionStorage.setItem('eg_auth', 'true');
+        setIsAuthenticated(true);
+        setAuthError('');
+      } else {
+        setAuthError('Incorrect password.');
+        setPasswordInput('');
+      }
+    };
+
     return (
       <div className="min-h-screen bg-black flex items-center justify-center font-sans">
         <div className="border border-zinc-800/60 bg-[#0A0A0A] p-8 rounded-xl shadow-2xl w-full max-w-sm text-center">
           <div className="w-12 h-12 bg-white text-black flex items-center justify-center rounded-lg font-bold text-2xl tracking-tighter mx-auto mb-6">EG</div>
-          <h1 className="text-xl font-medium text-zinc-100 mb-2">EpicGlobal Security</h1>
-          <button onClick={() => setIsAuthenticated(true)} className="w-full py-2.5 bg-white text-black rounded-md text-sm font-medium hover:bg-zinc-200 mt-4"><Lock size={16} className="inline mr-2" /> Secure Login</button>
+          <h1 className="text-xl font-medium text-zinc-100 mb-2">EpicGlobal Control</h1>
+          <p className="text-sm text-zinc-500 mb-6">Enter your access password to continue.</p>
+          <form onSubmit={handleAuth} className="space-y-3">
+            <input
+              type="password"
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              placeholder="Password"
+              autoFocus
+              className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600"
+            />
+            {authError && <p className="text-red-400 text-xs">{authError}</p>}
+            <button type="submit" className="w-full py-2.5 bg-white text-black rounded-md text-sm font-medium hover:bg-zinc-200">
+              <Lock size={14} className="inline mr-2" /> Unlock
+            </button>
+          </form>
         </div>
       </div>
     );

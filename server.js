@@ -1,160 +1,605 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
-const os = require('os');
 const { exec } = require('child_process');
-const util = require('util');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const util = require('util');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const execPromise = util.promisify(exec);
 
+// ---------------------------------------------------------
+// CONFIG
+// ---------------------------------------------------------
+const DEPLOY_ROOT = '/var/www/epic-deployments';
+const REGISTRY_PATH = path.join(process.cwd(), 'projects.json');
+const HISTORY_PATH = path.join(process.cwd(), 'deploy-history.json');
+const CADDYFILE_PATH = '/etc/caddy/Caddyfile';
+const PORT = process.env.PORT || 4000;
+
 const app = express();
-app.use(cors());
-app.use(express.json());
-
 const server = http.createServer(app);
-
-// Initialize Socket.IO with Production VIP List
 const io = new Server(server, {
   cors: {
     origin: [
-      "http://localhost:5173", 
-      "https://epicglobal.app", 
-      "https://www.epicglobal.app",
-      "https://api.epicglobal.app"
+      'http://localhost:5173',
+      'https://epicglobal.app',
+      'https://www.epicglobal.app',
+      'https://api.epicglobal.app'
     ],
-    methods: ["GET", "POST"],
+    methods: ['GET', 'POST'],
     credentials: true
   }
 });
 
-// --- ROUTE 1: Edge Deployer (Cloudflare Pages) ---
+// ---------------------------------------------------------
+// MIDDLEWARE
+// ---------------------------------------------------------
+app.use(cors({
+  origin: [
+    'http://localhost:5173',
+    'https://epicglobal.app',
+    'https://www.epicglobal.app',
+    'https://api.epicglobal.app'
+  ],
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    terminalOutput: err.message
+  });
+});
+
+// ---------------------------------------------------------
+// HELPERS: Defense & Normalization
+// ---------------------------------------------------------
+function quoteForShell(val) {
+  return "'" + String(val).replace(/'/g, "'\\''") + "'";
+}
+
+function normalizeProjectName(val) {
+  return String(val || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function normalizeDomain(val) {
+  return String(val || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/$/, '');
+}
+
+function validateUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function getRegistry() {
+  if (!fs.existsSync(REGISTRY_PATH)) {
+    return { nextPort: 5100, projects: {} };
+  }
+  try {
+    return JSON.parse(fs.readFileSync(REGISTRY_PATH, 'utf8'));
+  } catch (e) {
+    console.error('Registry parse error:', e);
+    return { nextPort: 5100, projects: {} };
+  }
+}
+
+function saveRegistry(registry) {
+  try {
+    fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
+  } catch (e) {
+    console.error('Registry save error:', e);
+  }
+}
+
+function getHistory() {
+  if (!fs.existsSync(HISTORY_PATH)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function appendHistory(projectName, status, details) {
+  try {
+    const history = getHistory();
+    history.unshift({
+      id: Date.now(),
+      projectName: projectName,
+      status: status,
+      timestamp: new Date().toISOString(),
+      details: details
+    });
+    // Keep last 100 entries
+    if (history.length > 100) history.splice(100);
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(history, null, 2));
+  } catch (e) {
+    console.error('History write error:', e);
+  }
+}
+
+function buildCaddyConfig(registry) {
+  let config = 'api.epicglobal.app {\n  reverse_proxy localhost:4000\n}\n';
+  
+  Object.entries(registry.projects).forEach(([name, data]) => {
+    const hosts = [name + '.epicglobal.app'];
+    if (data.domain) {
+      hosts.push(data.domain);
+    }
+    hosts.forEach((host) => {
+      config += '\n' + host + ' {\n  reverse_proxy localhost:' + data.port + '\n}\n';
+    });
+  });
+  
+  return config;
+}
+
+// ---------------------------------------------------------
+// TELEMETRY: Real-time Metrics + Health Broadcast
+// ---------------------------------------------------------
+setInterval(() => {
+  try {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const cpuLoad = os.loadavg()[0] / os.cpus().length;
+
+    io.emit('telemetry', {
+      ram: Math.round((usedMem / totalMem) * 100),
+      cpu: Math.min(Math.round(cpuLoad * 100), 100),
+      timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
+    });
+  } catch (e) {
+    // Silently fail telemetry
+  }
+}, 2500);
+
+// Health check broadcast every 15s
+setInterval(async () => {
+  try {
+    const { stdout } = await execPromise('pm2 jlist');
+    const processes = JSON.parse(stdout || '[]');
+    const registry = getRegistry();
+    const health = {};
+    Object.keys(registry.projects).forEach((name) => {
+      const proc = processes.find((p) => p.name === name);
+      health[name] = {
+        status: proc ? proc.pm2_env.status : 'stopped',
+        uptime: proc ? proc.pm2_env.pm_uptime : null,
+        restarts: proc ? proc.pm2_env.restart_time : 0,
+        memory: proc ? Math.round(proc.monit.memory / 1024 / 1024) : 0,
+        cpu: proc ? proc.monit.cpu : 0
+      };
+    });
+    io.emit('project_health', health);
+  } catch (e) {
+    // PM2 not running or no projects
+  }
+}, 15000);
+
+// ---------------------------------------------------------
+// API: Edge Deployer (Cloudflare Pages)
+// ---------------------------------------------------------
 app.post('/api/deploy', async (req, res) => {
   const { projectName, githubUser, githubRepo, targetBranch } = req.body;
   const CF_ACCOUNT_ID = process.env.CF_ACCOUNT_ID;
   const CF_API_TOKEN = process.env.CF_API_TOKEN;
 
-  if (!CF_ACCOUNT_ID || !CF_API_TOKEN) return res.status(500).json({ error: 'Missing Cloudflare credentials.' });
+  if (!CF_ACCOUNT_ID || !CF_API_TOKEN) {
+    return res.status(500).json({
+      success: false,
+      error: 'Missing Cloudflare credentials.'
+    });
+  }
 
   try {
-    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects`, {
+    const response = await fetch('https://api.cloudflare.com/client/v4/accounts/' + CF_ACCOUNT_ID + '/pages/projects', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${CF_API_TOKEN}`
+        'Authorization': 'Bearer ' + CF_API_TOKEN
       },
       body: JSON.stringify({
         name: projectName,
         source: {
           type: 'github',
-          config: { owner: githubUser, repo_name: githubRepo, production_branch: targetBranch || 'main' }
+          config: {
+            owner: githubUser,
+            repo_name: githubRepo,
+            production_branch: targetBranch || 'main'
+          }
         },
-        build_config: { build_command: 'npm run build', destination_dir: 'dist', root_dir: '/' }
+        build_config: {
+          build_command: 'npm run build',
+          destination_dir: 'dist',
+          root_dir: '/'
+        }
       })
     });
 
     const data = await response.json();
-    if (!data.success) throw new Error(data.errors[0].message);
+    if (!data.success) {
+      throw new Error(data.errors[0]?.message || 'Cloudflare API error');
+    }
 
-    res.status(200).json({ projectUrl: `https://${projectName}.pages.dev`, details: data.result });
+    res.json({
+      success: true,
+      projectUrl: 'https://' + projectName + '.pages.dev',
+      details: data.result
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message || 'Failed to provision deployment.' });
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to provision Cloudflare deployment.',
+      terminalOutput: error.message
+    });
   }
 });
 
-// --- ROUTE 2: Backend Orchestrator (PM2) ---
+// ---------------------------------------------------------
+// API: Backend Orchestrator (PM2) - Sync-Locked Builds
+// ---------------------------------------------------------
+app.post('/api/orchestrator/deploy', async (req, res) => {
+  const repoUrl = String(req.body?.repoUrl || '').trim();
+  const projectName = normalizeProjectName(req.body?.projectName);
+  const domain = normalizeDomain(req.body?.domain);
+
+  if (!projectName) {
+    return res.status(400).json({
+      success: false,
+      error: 'A valid project name is required.'
+    });
+  }
+
+  if (!repoUrl) {
+    return res.status(400).json({
+      success: false,
+      error: 'A repository URL is required.'
+    });
+  }
+
+  if (!validateUrl(repoUrl)) {
+    return res.status(400).json({
+      success: false,
+      error: 'The repository URL must be a valid HTTP(S) URL.'
+    });
+  }
+
+  const registry = getRegistry();
+  const existingProject = registry.projects[projectName];
+  const port = existingProject?.port ?? registry.nextPort;
+
+  if (!existingProject) {
+    registry.nextPort += 1;
+  }
+
+  registry.projects[projectName] = {
+    port: port,
+    repoUrl: repoUrl,
+    domain: domain || undefined
+  };
+  saveRegistry(registry);
+
+  const deployPath = path.join(DEPLOY_ROOT, projectName);
+
+  // Built with "+" to prevent "Blue Screen" syntax issues in iPad editor
+  const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+    ' && rm -rf ' + quoteForShell(deployPath) +
+    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath) +
+    ' && cd ' + quoteForShell(deployPath) +
+    ' && npm install --no-audit --no-fund' +
+    ' && npm run build --if-present' +
+    ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
+    ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
+    '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
+    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi' +
+    ' && pm2 save' +
+    ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
+
+  try {
+    const { stdout, stderr } = await execPromise(cmd);
+
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim();
+
+    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
+    appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl });
+
+    return res.json({
+      success: true,
+      port: port,
+      url: url,
+      terminalOutput: output || 'Deployment finished',
+      log: output || 'Deployment finished'
+    });
+  } catch (error) {
+    const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
+    appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl });
+
+    return res.status(500).json({
+      success: false,
+      port: port,
+      error: output || 'Deployment failed.',
+      terminalOutput: output || 'Deployment failed.'
+    });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Project Status (Health + Registry)
+// ---------------------------------------------------------
+app.get('/api/orchestrator/status', async (req, res) => {
+  try {
+    const registry = getRegistry();
+    let processes = [];
+
+    try {
+      const { stdout } = await execPromise('pm2 jlist');
+      processes = JSON.parse(stdout || '[]');
+    } catch {
+      // PM2 not available
+    }
+
+    const projects = {};
+    Object.entries(registry.projects).forEach(([name, data]) => {
+      const proc = processes.find((p) => p.name === name);
+      projects[name] = {
+        ...data,
+        health: {
+          status: proc ? proc.pm2_env.status : 'stopped',
+          uptime: proc ? proc.pm2_env.pm_uptime : null,
+          restarts: proc ? proc.pm2_env.restart_time : 0,
+          memory: proc ? Math.round(proc.monit.memory / 1024 / 1024) : 0,
+          cpu: proc ? proc.monit.cpu : 0
+        }
+      };
+    });
+
+    res.json({ success: true, projects: projects });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Project Delete (Single Project)
+// ---------------------------------------------------------
+app.post('/api/orchestrator/delete', async (req, res) => {
+  const projectName = normalizeProjectName(req.body?.projectName);
+
+  if (!projectName) {
+    return res.status(400).json({ success: false, error: 'Project name is required.' });
+  }
+
+  const registry = getRegistry();
+
+  if (!registry.projects[projectName]) {
+    return res.status(404).json({ success: false, error: 'Project not found in registry.' });
+  }
+
+  const deployPath = path.join(DEPLOY_ROOT, projectName);
+
+  try {
+    try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (e) {}
+    try { await execPromise('rm -rf ' + quoteForShell(deployPath)); } catch (e) {}
+
+    delete registry.projects[projectName];
+    saveRegistry(registry);
+
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await execPromise('pm2 save');
+
+    appendHistory(projectName, 'deleted', {});
+
+    res.json({ success: true, terminalOutput: projectName + ' has been deleted.' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message, terminalOutput: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Deployment History
+// ---------------------------------------------------------
+app.get('/api/orchestrator/history', (req, res) => {
+  res.json({ success: true, history: getHistory() });
+});
+
+// ---------------------------------------------------------
+// API: Alternative Backend Deploy (Home Directory)
+// ---------------------------------------------------------
 app.post('/api/deploy-backend', async (req, res) => {
   const { projectName, githubUser, githubRepo, targetPort } = req.body;
-  
-  // 1. Secure GitHub Token Logic
+
+  if (!projectName || !githubUser || !githubRepo || !targetPort) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields: projectName, githubUser, githubRepo, targetPort'
+    });
+  }
+
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-  const authString = GITHUB_TOKEN ? `${GITHUB_TOKEN}@` : '';
-  const repoUrl = `https://${authString}github.com/${githubUser}/${githubRepo}.git`;
-  
+  const authString = GITHUB_TOKEN ? GITHUB_TOKEN + '@' : '';
+  const repoUrl = 'https://' + authString + 'github.com/' + githubUser + '/' + githubRepo + '.git';
   const deployPath = path.join(os.homedir(), 'deployments', projectName);
 
   try {
-    // 2. Hard Cleanup: Ensure we have a clean slate to prevent ENOTEMPTY errors
-    if (!fs.existsSync(path.join(os.homedir(), 'deployments'))) {
-      fs.mkdirSync(path.join(os.homedir(), 'deployments'), { recursive: true });
+    const deploymentsDir = path.join(os.homedir(), 'deployments');
+    if (!fs.existsSync(deploymentsDir)) {
+      fs.mkdirSync(deploymentsDir, { recursive: true });
     }
+
     if (fs.existsSync(deployPath)) {
-      await execPromise(`rm -rf ${deployPath}`);
+      await execPromise('rm -rf ' + quoteForShell(deployPath));
     }
 
-    // 3. Shallow Clone: --depth 1 saves massive amounts of RAM and Disk
-    await execPromise(`git clone --depth 1 ${repoUrl} ${deployPath}`);
-    
-    // 4. Lean Installation: No audit/fund checks to keep CPU usage low
-    await execPromise(`cd ${deployPath} && npm install --no-audit --no-fund`);
-    
-    // 5. PM2 Ignition
-    await execPromise(`cd ${deployPath} && PORT=${targetPort} pm2 start server.js --name "${projectName}" --update-env`);
-    await execPromise(`pm2 save`);
+    await execPromise('git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath));
+    await execPromise('cd ' + quoteForShell(deployPath) + ' && npm install --no-audit --no-fund');
+    await execPromise('cd ' + quoteForShell(deployPath) + ' && PORT=' + targetPort + ' pm2 start server.js --name ' + quoteForShell(projectName) + ' --update-env');
+    await execPromise('pm2 save');
 
-    res.status(200).json({ message: 'Backend successfully deployed.', port: targetPort });
+    res.json({
+      success: true,
+      message: 'Backend successfully deployed.',
+      port: targetPort
+    });
   } catch (error) {
-    console.error('Deployment Error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Backend deployment error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Backend deployment failed.',
+      terminalOutput: error.message
+    });
   }
 });
 
-// --- ROUTE 3: Environment Variables Manager ---
+// ---------------------------------------------------------
+// API: Environment Variables Manager
+// ---------------------------------------------------------
 app.post('/api/env', async (req, res) => {
   const { projectName, envVars } = req.body;
+
+  if (!projectName || !envVars || typeof envVars !== 'object') {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing or invalid projectName or envVars.'
+    });
+  }
+
   const deployPath = path.join(os.homedir(), 'deployments', projectName);
 
   try {
-    if (!fs.existsSync(deployPath)) return res.status(404).json({ error: 'Backend deployment not found.' });
+    if (!fs.existsSync(deployPath)) {
+      return res.status(404).json({
+        success: false,
+        error: 'Backend deployment not found.'
+      });
+    }
 
     let envString = '';
-    for (const [key, value] of Object.entries(envVars)) {
-      envString += `${key}="${value}"\n`;
-    }
-    
-    fs.writeFileSync(path.join(deployPath, '.env'), envString);
-    
-    // Restart to apply new env vars
-    await execPromise(`cd ${deployPath} && pm2 restart "${projectName}" --update-env`);
-    await execPromise(`pm2 save`);
-
-    res.status(200).json({ message: 'Secrets injected and backend rebooted safely.' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// --- ROUTE 4: Live Log Streamer ---
-app.get('/api/logs/:projectName', async (req, res) => {
-  try {
-    const { stdout } = await execPromise(`pm2 logs "${req.params.projectName}" --nostream --raw --lines 100`);
-    res.status(200).json({ logs: stdout });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// --- SOCKET: Real-time Telemetry Heartbeat ---
-io.on('connection', (socket) => {
-  const metricsInterval = setInterval(() => {
-    const totalMem = os.totalmem();
-    const freeMem = os.freemem();
-    const usedMem = totalMem - freeMem;
-    
-    socket.emit('telemetry', {
-        ram: Math.round((usedMem / totalMem) * 100),
-        cpu: Math.min(Math.round((os.loadavg()[0] / os.cpus().length) * 100), 100),
-        timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
+    Object.entries(envVars).forEach(([key, value]) => {
+      envString += key + '=' + JSON.stringify(String(value)) + '\n';
     });
-  }, 2500);
 
-  socket.on('disconnect', () => clearInterval(metricsInterval));
+    fs.writeFileSync(path.join(deployPath, '.env'), envString);
+
+    await execPromise('cd ' + quoteForShell(deployPath) + ' && pm2 restart ' + quoteForShell(projectName) + ' --update-env');
+    await execPromise('pm2 save');
+
+    res.json({
+      success: true,
+      message: 'Environment variables injected and backend restarted.'
+    });
+  } catch (error) {
+    console.error('Env update error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to update environment variables.',
+      terminalOutput: error.message
+    });
+  }
 });
 
-// Boot the Engine
-const PORT = process.env.PORT || 4000;
+// ---------------------------------------------------------
+// API: Live Log Streamer
+// ---------------------------------------------------------
+app.get('/api/logs/:projectName', async (req, res) => {
+  const projectName = req.params.projectName;
+
+  if (!projectName || !/^[a-z0-9-]+$/.test(projectName)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid project name.'
+    });
+  }
+
+  try {
+    const { stdout } = await execPromise('pm2 logs ' + quoteForShell(projectName) + ' --nostream --raw --lines 100');
+    res.json({
+      success: true,
+      logs: stdout
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch logs.',
+      terminalOutput: error.message
+    });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Nuclear Cleanup (Delete All Deployments)
+// ---------------------------------------------------------
+app.post('/api/orchestrator/cleanup', async (req, res) => {
+  try {
+    const registry = getRegistry();
+    const projects = Object.keys(registry.projects);
+
+    for (const name of projects) {
+      try {
+        await execPromise('pm2 delete ' + quoteForShell(name));
+      } catch (e) {
+        // Silently continue if PM2 delete fails
+      }
+    }
+
+    await execPromise('rm -rf ' + quoteForShell(DEPLOY_ROOT) + '/*');
+    saveRegistry({ nextPort: 5100, projects: {} });
+
+    fs.writeFileSync(CADDYFILE_PATH, 'api.epicglobal.app {\n  reverse_proxy localhost:4000\n}\n');
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+
+    res.json({
+      success: true,
+      terminalOutput: 'CLEAN SLATE: All projects wiped.'
+    });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Cleanup failed.',
+      terminalOutput: error.message
+    });
+  }
+});
+
+// ---------------------------------------------------------
+// SOCKET.IO: Real-time Telemetry Heartbeat
+// ---------------------------------------------------------
+io.on('connection', (socket) => {
+  console.log('Socket connected:', socket.id);
+
+  socket.on('disconnect', () => {
+    console.log('Socket disconnected:', socket.id);
+  });
+});
+
+// ---------------------------------------------------------
+// BOOT
+// ---------------------------------------------------------
 server.listen(PORT, () => {
-    console.log(`\x1b[32m[system]\x1b[0m EpicGlobal Engine engaged on port ${PORT}`);
+  console.log('\x1b[32m[system]\x1b[0m EpicGlobal Orchestrator v3 engaged on port ' + PORT);
 });
