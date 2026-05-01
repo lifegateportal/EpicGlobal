@@ -25,6 +25,8 @@ jobs:
       - name: Inject Production Variables
         run: |
           echo "VITE_TEST_MESSAGE=${{ secrets.VITE_TEST_MESSAGE }}" >> .env
+          echo "VITE_SOCKET_URL=${{ secrets.VITE_SOCKET_URL }}" >> .env
+          echo "VITE_AUTH_PASSWORD=${{ secrets.VITE_AUTH_PASSWORD }}" >> .env
 
       - name: Build Vite App
         run: npm run build
