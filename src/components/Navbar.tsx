@@ -1,15 +1,17 @@
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, LogOut } from 'lucide-react';
 
 type NavbarProps = {
   serverConnected?: boolean;
   connectionStatusLabel?: string;
   connectionStatusDetail?: string;
+  onLogout?: () => void;
 };
 
 export function Navbar({
   serverConnected = false,
   connectionStatusLabel = 'Disconnected',
   connectionStatusDetail,
+  onLogout,
 }: NavbarProps) {
   return (
     <nav className="sticky top-0 z-50 border-b border-zinc-800/60 bg-black/80 backdrop-blur-md">
@@ -40,6 +42,11 @@ export function Navbar({
           </div>
           
           <button className="text-sm font-medium text-zinc-400 hover:text-zinc-100 transition-colors">Feedback</button>
+          {onLogout && (
+            <button onClick={onLogout} title="Lock & Log out" className="flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-red-400 transition-colors">
+              <LogOut size={15} />
+            </button>
+          )}
           <div className="w-8 h-8 rounded-full border border-zinc-800 bg-zinc-900 cursor-pointer hover:border-zinc-600 transition-colors"></div>
         </div>
       </div>

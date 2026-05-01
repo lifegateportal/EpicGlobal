@@ -199,6 +199,10 @@ export default function App() {
         serverConnected={serverConnected}
         connectionStatusLabel={connectionStatusLabel}
         connectionStatusDetail={connectionStatusDetail}
+        onLogout={() => {
+          sessionStorage.removeItem('eg_auth');
+          setIsAuthenticated(false);
+        }}
       />
 
       {isOffline && (
