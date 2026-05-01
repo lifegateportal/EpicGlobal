@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 
 export default function ProjectOrchestrator() {
     const [projectData, setProjectData] = useState({
@@ -8,7 +8,7 @@ export default function ProjectOrchestrator() {
     });
     const [status, setStatus] = useState({ loading: false, logs: '', error: '' });
 
-    const handleDeploy = async (e) => {
+    const handleDeploy = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         setStatus({ loading: true, logs: '🚀 Initiating remote orchestration...', error: '' });
 
