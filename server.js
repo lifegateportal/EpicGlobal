@@ -19,6 +19,10 @@ const HISTORY_PATH = path.join(process.cwd(), 'deploy-history.json');
 const CADDYFILE_PATH = '/etc/caddy/Caddyfile';
 const PORT = process.env.PORT || 4000;
 
+// Single-worker deploy queue to prevent overlapping deploys on one VPS.
+const deployQueue = [];
+let activeDeploy = null;
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -154,6 +158,139 @@ function buildCaddyConfig(registry) {
   return config;
 }
 
+function getQueueSnapshot() {
+  return {
+    running: activeDeploy,
+    queued: deployQueue.map((item, index) => ({
+      id: item.id,
+      projectName: item.payload.projectName,
+      enqueuedAt: item.enqueuedAt,
+      position: index + 1
+    })),
+    totalQueued: deployQueue.length
+  };
+}
+
+function emitQueueStatus() {
+  io.emit('deploy_queue', getQueueSnapshot());
+}
+
+function isProjectBusy(projectName) {
+  if (activeDeploy && activeDeploy.projectName === projectName) {
+    return true;
+  }
+  return deployQueue.some((item) => item.payload.projectName === projectName);
+}
+
+function enqueueDeploy(payload) {
+  return new Promise((resolve, reject) => {
+    const item = {
+      id: Date.now().toString() + '-' + Math.random().toString(16).slice(2, 8),
+      payload,
+      enqueuedAt: new Date().toISOString(),
+      resolve,
+      reject
+    };
+    deployQueue.push(item);
+    emitQueueStatus();
+    processDeployQueue();
+  });
+}
+
+async function processDeployQueue() {
+  if (activeDeploy || deployQueue.length === 0) {
+    return;
+  }
+
+  const next = deployQueue.shift();
+  activeDeploy = {
+    id: next.id,
+    projectName: next.payload.projectName,
+    startedAt: new Date().toISOString()
+  };
+  emitQueueStatus();
+
+  try {
+    const result = await executeOrchestratorDeploy(next.payload);
+    next.resolve(result);
+  } catch (error) {
+    next.reject(error);
+  } finally {
+    activeDeploy = null;
+    emitQueueStatus();
+    processDeployQueue();
+  }
+}
+
+async function executeOrchestratorDeploy(payload) {
+  const repoUrl = payload.repoUrl;
+  const projectName = payload.projectName;
+  const domain = payload.domain;
+
+  const registry = getRegistry();
+  const existingProject = registry.projects[projectName];
+  const port = existingProject?.port ?? registry.nextPort;
+
+  if (!existingProject) {
+    registry.nextPort += 1;
+  }
+
+  registry.projects[projectName] = {
+    port: port,
+    repoUrl: repoUrl,
+    domain: domain || undefined
+  };
+  saveRegistry(registry);
+
+  const deployPath = path.join(DEPLOY_ROOT, projectName);
+
+  // Built with "+" to prevent "Blue Screen" syntax issues in iPad editor
+  const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+    ' && rm -rf ' + quoteForShell(deployPath) +
+    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath) +
+    ' && cd ' + quoteForShell(deployPath) +
+    ' && npm install --no-audit --no-fund' +
+    ' && npm run build --if-present' +
+    ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
+    ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
+    '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
+    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi' +
+    ' && pm2 save' +
+    ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
+
+  try {
+    const { stdout, stderr } = await execPromise(cmd);
+
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+
+    const output = [stdout, stderr].filter(Boolean).join('\n').trim();
+    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
+    appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl });
+
+    return {
+      success: true,
+      port: port,
+      url: url,
+      terminalOutput: output || 'Deployment finished',
+      log: output || 'Deployment finished'
+    };
+  } catch (error) {
+    const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
+    appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl });
+
+    throw {
+      statusCode: 500,
+      body: {
+        success: false,
+        port: port,
+        error: output || 'Deployment failed.',
+        terminalOutput: output || 'Deployment failed.'
+      }
+    };
+  }
+}
+
 // ---------------------------------------------------------
 // TELEMETRY: Real-time Metrics + Health Broadcast
 // ---------------------------------------------------------
@@ -285,66 +422,32 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
     });
   }
 
-  const registry = getRegistry();
-  const existingProject = registry.projects[projectName];
-  const port = existingProject?.port ?? registry.nextPort;
-
-  if (!existingProject) {
-    registry.nextPort += 1;
+  if (isProjectBusy(projectName)) {
+    return res.status(409).json({
+      success: false,
+      error: 'This project already has a running or queued deployment.'
+    });
   }
-
-  registry.projects[projectName] = {
-    port: port,
-    repoUrl: repoUrl,
-    domain: domain || undefined
-  };
-  saveRegistry(registry);
-
-  const deployPath = path.join(DEPLOY_ROOT, projectName);
-
-  // Built with "+" to prevent "Blue Screen" syntax issues in iPad editor
-  const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
-    ' && rm -rf ' + quoteForShell(deployPath) +
-    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath) +
-    ' && cd ' + quoteForShell(deployPath) +
-    ' && npm install --no-audit --no-fund' +
-    ' && npm run build --if-present' +
-    ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
-    ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
-    '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
-    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi' +
-    ' && pm2 save' +
-    ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
   try {
-    const { stdout, stderr } = await execPromise(cmd);
-
-    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
-
-    const output = [stdout, stderr].filter(Boolean).join('\n').trim();
-
-    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
-    appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl });
-
-    return res.json({
-      success: true,
-      port: port,
-      url: url,
-      terminalOutput: output || 'Deployment finished',
-      log: output || 'Deployment finished'
-    });
+    const result = await enqueueDeploy({ projectName, repoUrl, domain });
+    return res.json(result);
   } catch (error) {
-    const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
-    appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl });
-
-    return res.status(500).json({
+    const statusCode = error?.statusCode || 500;
+    const body = error?.body || {
       success: false,
-      port: port,
-      error: output || 'Deployment failed.',
-      terminalOutput: output || 'Deployment failed.'
-    });
+      error: error?.message || 'Deployment failed.',
+      terminalOutput: error?.message || 'Deployment failed.'
+    };
+    return res.status(statusCode).json(body);
   }
+});
+
+// ---------------------------------------------------------
+// API: Deploy Queue Snapshot
+// ---------------------------------------------------------
+app.get('/api/orchestrator/queue', (req, res) => {
+  res.json({ success: true, queue: getQueueSnapshot() });
 });
 
 // ---------------------------------------------------------
@@ -387,6 +490,13 @@ app.get('/api/orchestrator/status', async (req, res) => {
 // API: Project Delete (Single Project)
 // ---------------------------------------------------------
 app.post('/api/orchestrator/delete', async (req, res) => {
+  if (activeDeploy) {
+    return res.status(409).json({
+      success: false,
+      error: 'Deployment currently running. Wait until queue is idle before deleting.'
+    });
+  }
+
   const projectName = normalizeProjectName(req.body?.projectName);
 
   if (!projectName) {
@@ -554,6 +664,13 @@ app.get('/api/logs/:projectName', async (req, res) => {
 // API: Nuclear Cleanup (Delete All Deployments)
 // ---------------------------------------------------------
 app.post('/api/orchestrator/cleanup', async (req, res) => {
+  if (activeDeploy || deployQueue.length > 0) {
+    return res.status(409).json({
+      success: false,
+      error: 'Cannot run cleanup while deployments are running or queued.'
+    });
+  }
+
   try {
     const registry = getRegistry();
     const projects = Object.keys(registry.projects);
@@ -591,6 +708,7 @@ app.post('/api/orchestrator/cleanup', async (req, res) => {
 // ---------------------------------------------------------
 io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
+  socket.emit('deploy_queue', getQueueSnapshot());
 
   socket.on('disconnect', () => {
     console.log('Socket disconnected:', socket.id);

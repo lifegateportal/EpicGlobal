@@ -27,6 +27,12 @@ type HistoryEntry = {
   details: Record<string, string | number>;
 };
 
+type QueueSnapshot = {
+  running: { id: string; projectName: string; startedAt: string } | null;
+  queued: Array<{ id: string; projectName: string; enqueuedAt: string; position: number }>;
+  totalQueued: number;
+};
+
 function StatusBadge({ status }: { status: string }) {
   if (status === 'online') return <span className="flex items-center gap-1.5 text-green-400 text-xs font-medium"><CheckCircle2 size={12} /> Online</span>;
   if (status === 'errored') return <span className="flex items-center gap-1.5 text-red-400 text-xs font-medium"><XCircle size={12} /> Errored</span>;
@@ -44,6 +50,7 @@ export default function ProjectOrchestrator() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
   const [projectLogs, setProjectLogs] = useState<Record<string, string>>({});
+  const [queue, setQueue] = useState<QueueSnapshot>({ running: null, queued: [], totalQueued: 0 });
 
   const fetchStatus = async () => {
     try {
@@ -65,10 +72,22 @@ export default function ProjectOrchestrator() {
     } catch {}
   };
 
+  const fetchQueue = async () => {
+    try {
+      const res = await fetch(API + '/api/orchestrator/queue');
+      const data = await res.json();
+      if (data.success) setQueue(data.queue);
+    } catch {}
+  };
+
   useEffect(() => {
     fetchStatus();
     fetchHistory();
-    const interval = setInterval(fetchStatus, 15000);
+    fetchQueue();
+    const interval = setInterval(() => {
+      fetchStatus();
+      fetchQueue();
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -90,13 +109,16 @@ export default function ProjectOrchestrator() {
         setForm({ projectName: '', repoUrl: '', domain: '' });
         fetchStatus();
         fetchHistory();
+        fetchQueue();
       } else {
         setDeployStatus({ loading: false, logs: '', error: data.error || 'Deployment failed.' });
-        toast.error('Deployment failed.');
+        toast.error(data.error || 'Deployment failed.');
+        fetchQueue();
       }
     } catch {
       setDeployStatus({ loading: false, logs: '', error: 'Connection failed. Check api.epicglobal.app DNS.' });
       toast.error('Could not reach API.');
+      fetchQueue();
     }
   };
 
@@ -207,6 +229,32 @@ export default function ProjectOrchestrator() {
               {deployStatus.error && <p className="text-red-400">Error: {deployStatus.error}</p>}
               {deployStatus.logs && <pre className="text-emerald-400 whitespace-pre-wrap">{deployStatus.logs}</pre>}
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* DEPLOY QUEUE */}
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
+        <div className="p-4 bg-zinc-900/20 border-b border-zinc-800/60 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-zinc-100">Deploy Queue</h2>
+          <button onClick={fetchQueue} className="text-zinc-500 hover:text-zinc-300 transition-colors" title="Refresh queue">
+            <RefreshCw size={14} />
+          </button>
+        </div>
+        <div className="p-4 text-sm">
+          {queue.running ? (
+            <p className="text-zinc-300">Running: <span className="text-white font-medium">{queue.running.projectName}</span></p>
+          ) : (
+            <p className="text-zinc-500">No active deployment.</p>
+          )}
+          {queue.queued.length > 0 ? (
+            <div className="mt-2 space-y-1">
+              {queue.queued.map((item) => (
+                <p key={item.id} className="text-zinc-500">Queued #{item.position}: {item.projectName}</p>
+              ))}
+            </div>
+          ) : (
+            <p className="text-zinc-600 mt-1">Queue empty.</p>
           )}
         </div>
       </div>
