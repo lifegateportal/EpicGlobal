@@ -24,7 +24,7 @@ type HistoryEntry = {
   projectName: string;
   status: 'success' | 'failed' | 'deleted';
   timestamp: string;
-  details: Record<string, string | number>;
+  details: Record<string, string | number> & { strategy?: string };
 };
 
 type QueueSnapshot = {
@@ -192,9 +192,10 @@ export default function ProjectOrchestrator() {
 
       {/* DEPLOY FORM */}
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center gap-2">
+        <div className="p5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center gap-2">
           <Plus size={16} className="text-zinc-400" />
           <h2 className="text-sm font-semibold text-zinc-100">Deploy New Project</h2>
+          <span className="ml-auto text-xs text-blue-400 bg-blue-950/50 border border-blue-900/50 rounded px-2 py-0.5">Blue-green for existing projects</span>
         </div>
         <div className="p-6">
           <form onSubmit={handleDeploy} className="space-y-4">
@@ -341,6 +342,9 @@ export default function ProjectOrchestrator() {
                   {entry.status === 'deleted' && <Trash2 size={14} className="text-zinc-500 shrink-0" />}
                   <div>
                     <span className="text-sm text-zinc-300 font-medium">{entry.projectName}</span>
+                    {entry.details.strategy === 'blue-green' && (
+                      <span className="ml-2 text-xs bg-blue-950 text-blue-400 border border-blue-800 rounded px-1.5 py-0.5">blue-green</span>
+                    )}
                     {entry.details.url && <span className="ml-2 text-xs text-zinc-600">{String(entry.details.url)}</span>}
                   </div>
                 </div>

@@ -18,6 +18,8 @@ const REGISTRY_PATH = path.join(process.cwd(), 'projects.json');
 const HISTORY_PATH = path.join(process.cwd(), 'deploy-history.json');
 const CADDYFILE_PATH = '/etc/caddy/Caddyfile';
 const PORT = process.env.PORT || 4000;
+// Blue-green: candidate port offset - each project's canary runs at port + this value
+const CANDIDATE_PORT_OFFSET = 1000;
 
 // Single-worker deploy queue to prevent overlapping deploys on one VPS.
 const deployQueue = [];
@@ -222,29 +224,92 @@ async function processDeployQueue() {
   }
 }
 
-async function executeOrchestratorDeploy(payload) {
-  const repoUrl = payload.repoUrl;
-  const projectName = payload.projectName;
-  const domain = payload.domain;
+// ---------------------------------------------------------
+// BLUE-GREEN HELPERS
+// ---------------------------------------------------------
 
-  const registry = getRegistry();
-  const existingProject = registry.projects[projectName];
-  const port = existingProject?.port ?? registry.nextPort;
-
-  if (!existingProject) {
-    registry.nextPort += 1;
+// Probe a local port until it responds 200 or retries exhausted.
+// Returns true if healthy, false if not.
+async function probeHealth(port, retries, delayMs) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await new Promise((resolve, reject) => {
+        const req = http.get('http://localhost:' + port + '/', (res) => {
+          if (res.statusCode >= 200 && res.statusCode < 500) {
+            resolve();
+          } else {
+            reject(new Error('status ' + res.statusCode));
+          }
+          res.resume();
+        });
+        req.on('error', reject);
+        req.setTimeout(3000, () => { req.destroy(); reject(new Error('timeout')); });
+      });
+      return true;
+    } catch (e) {
+      if (i < retries - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
   }
+  return false;
+}
 
-  registry.projects[projectName] = {
-    port: port,
-    repoUrl: repoUrl,
-    domain: domain || undefined
-  };
-  saveRegistry(registry);
+// Build and start a candidate PM2 process for a project.
+// Returns { stdout, stderr, candidateName, candidatePath }.
+async function buildCandidate(projectName, repoUrl, candidatePort) {
+  const candidateName = projectName + '-candidate';
+  const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
+  const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+    ' && rm -rf ' + quoteForShell(candidatePath) +
+    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
+    ' && cd ' + quoteForShell(candidatePath) +
+    ' && npm install --no-audit --no-fund' +
+    ' && npm run build --if-present' +
+    ' && pm2 delete ' + quoteForShell(candidateName) + ' || true' +
+    ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
+    '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
+    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; fi' +
+    ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
+
+  const { stdout, stderr } = await execPromise(cmd);
+  return { stdout, stderr, candidateName, candidatePath };
+}
+
+// Promote candidate: stop old PM2 app, move files, restart under stable name.
+async function promoteCandidate(projectName, candidateName, candidatePath, stablePort) {
+  const stablePath = path.join(DEPLOY_ROOT, projectName);
+
+  // Stop old stable and delete its PM2 entry
+  try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (e) {}
+  try { await execPromise('rm -rf ' + quoteForShell(stablePath)); } catch (e) {}
+
+  // Rename candidate path to stable
+  await execPromise('mv ' + quoteForShell(candidatePath) + ' ' + quoteForShell(stablePath));
+
+  // Stop candidate PM2 entry and start stable
+  try { await execPromise('pm2 delete ' + quoteForShell(candidateName)); } catch (e) {}
+
+  const cmd = 'if [ -d ' + quoteForShell(stablePath + '/dist') + ' ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
+    '; elif [ -d ' + quoteForShell(stablePath + '/build') + ' ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
+    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; fi';
+  await execPromise(cmd);
+  await execPromise('pm2 save');
+}
+
+// Tear down candidate after a failed health check.
+async function rollbackCandidate(candidateName, candidatePath) {
+  try { await execPromise('pm2 delete ' + quoteForShell(candidateName)); } catch (e) {}
+  try { await execPromise('rm -rf ' + quoteForShell(candidatePath)); } catch (e) {}
+}
+
+// ---------------------------------------------------------
+// DEPLOY LOGIC: First deploy (no existing project)
+// ---------------------------------------------------------
+async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   const deployPath = path.join(DEPLOY_ROOT, projectName);
 
-  // Built with "+" to prevent "Blue Screen" syntax issues in iPad editor
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(deployPath) +
     ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath) +
@@ -258,15 +323,92 @@ async function executeOrchestratorDeploy(payload) {
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
-  try {
-    const { stdout, stderr } = await execPromise(cmd);
+  const { stdout, stderr } = await execPromise(cmd);
+  return [stdout, stderr].filter(Boolean).join('\n').trim();
+}
 
-    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+async function executeOrchestratorDeploy(payload) {
+  const repoUrl = payload.repoUrl;
+  const projectName = payload.projectName;
+  const domain = payload.domain;
+
+  const registry = getRegistry();
+  const existingProject = registry.projects[projectName];
+  const port = existingProject ? existingProject.port : registry.nextPort;
+
+  if (!existingProject) {
+    registry.nextPort += 1;
+  }
+
+  registry.projects[projectName] = {
+    port: port,
+    repoUrl: repoUrl,
+    domain: domain || existingProject?.domain || undefined
+  };
+  saveRegistry(registry);
+
+  const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
+
+  try {
+    let output = '';
+
+    if (existingProject) {
+      // ---- BLUE-GREEN PATH (project already exists) ----
+      const candidatePort = port + CANDIDATE_PORT_OFFSET;
+      const logPrefix = '[blue-green] ' + projectName + ' candidate on port ' + candidatePort + ' -> ';
+
+      let buildResult;
+      try {
+        buildResult = await buildCandidate(projectName, repoUrl, candidatePort);
+      } catch (buildError) {
+        const errOut = [buildError.stdout, buildError.stderr, buildError.message].filter(Boolean).join('\n').trim();
+        appendHistory(projectName, 'failed', { error: errOut, repoUrl: repoUrl, strategy: 'blue-green' });
+        throw {
+          statusCode: 500,
+          body: {
+            success: false,
+            port: port,
+            error: 'Build failed: ' + errOut,
+            terminalOutput: errOut
+          }
+        };
+      }
+
+      output = [buildResult.stdout, buildResult.stderr].filter(Boolean).join('\n').trim();
+
+      // Health probe — 5 attempts, 3s apart
+      const healthy = await probeHealth(candidatePort, 5, 3000);
+
+      if (!healthy) {
+        await rollbackCandidate(buildResult.candidateName, buildResult.candidatePath);
+        const errMsg = logPrefix + 'health check FAILED. Old version kept. No downtime.';
+        appendHistory(projectName, 'failed', { error: errMsg, repoUrl: repoUrl, strategy: 'blue-green' });
+        throw {
+          statusCode: 502,
+          body: {
+            success: false,
+            port: port,
+            error: errMsg,
+            terminalOutput: errMsg
+          }
+        };
+      }
+
+      // Promote candidate to stable
+      await promoteCandidate(projectName, buildResult.candidateName, buildResult.candidatePath, port);
+      output += '\n' + logPrefix + 'health OK. Promoted to stable.';
+
+    } else {
+      // ---- FIRST-DEPLOY PATH ----
+      output = await executeFirstDeploy(projectName, repoUrl, domain, port);
+    }
+
+    const finalRegistry = getRegistry();
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(finalRegistry));
     await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
 
-    const output = [stdout, stderr].filter(Boolean).join('\n').trim();
-    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
-    appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl });
+    const strategy = existingProject ? 'blue-green' : 'first-deploy';
+    appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl, strategy: strategy });
 
     return {
       success: true,
@@ -276,6 +418,7 @@ async function executeOrchestratorDeploy(payload) {
       log: output || 'Deployment finished'
     };
   } catch (error) {
+    if (error.statusCode) throw error;
     const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
     appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl });
 
@@ -448,6 +591,33 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
 // ---------------------------------------------------------
 app.get('/api/orchestrator/queue', (req, res) => {
   res.json({ success: true, queue: getQueueSnapshot() });
+});
+
+// ---------------------------------------------------------
+// API: Blue-Green Candidate Status
+// ---------------------------------------------------------
+app.get('/api/orchestrator/candidates', async (req, res) => {
+  try {
+    let processes = [];
+    try {
+      const { stdout } = await execPromise('pm2 jlist');
+      processes = JSON.parse(stdout || '[]');
+    } catch {}
+
+    const candidates = processes
+      .filter((p) => p.name && p.name.endsWith('-candidate'))
+      .map((p) => ({
+        name: p.name,
+        port: null,
+        status: p.pm2_env.status,
+        uptime: p.pm2_env.pm_uptime,
+        memory: Math.round(p.monit.memory / 1024 / 1024)
+      }));
+
+    res.json({ success: true, candidates: candidates });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // ---------------------------------------------------------
