@@ -1,139 +1,105 @@
 import React, { useState } from 'react';
 
-export default function BackendManager() {
-  const [activeView, setActiveView] = useState<'deploy' | 'env' | 'logs'>('deploy');
-  
-  // Shared States
-  const [projectName, setProjectName] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [message, setMessage] = useState('');
+export default function ProjectOrchestrator() {
+    const [projectData, setProjectData] = useState({
+        projectName: '',
+        repoUrl: '',
+        domain: ''
+    });
+    const [status, setStatus] = useState({ loading: false, logs: '', error: '' });
 
-  // Deploy States
-  const [githubRepo, setGithubRepo] = useState('');
-  const [targetPort, setTargetPort] = useState('');
+    const handleDeploy = async (e) => {
+        e.preventDefault();
+        setStatus({ loading: true, logs: '🚀 Initiating remote orchestration...', error: '' });
 
-  // Env States
-  const [envKey, setEnvKey] = useState('');
-  const [envValue, setEnvValue] = useState('');
+        try {
+            const response = await fetch('http://178.128.158.90:4000/api/orchestrator/deploy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(projectData)
+            });
 
-  // Logs States
-  const [logs, setLogs] = useState('');
+            const data = await response.json();
 
-  const baseUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
+            if (data.success) {
+                setStatus({ 
+                    loading: false, 
+                    logs: `✅ Success! Project live on port: ${data.port}\n\nTerminal Output:\n${data.log}`,
+                    error: '' 
+                });
+            } else {
+                setStatus({ loading: false, logs: '', error: data.error });
+            }
+        } catch (err) {
+            setStatus({ loading: false, logs: '', error: 'Network Error: Check if Port 4000 is open.' });
+        }
+    };
 
-  const handleDeployBackend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setStatus('loading');
-    try {
-      const res = await fetch(`${baseUrl}/api/deploy-backend`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName,
-          githubUser: 'lifegateportal',
-          githubRepo,
-          targetPort
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setMessage(`Backend provisioned and running on port ${data.port}.`);
-      setStatus('success');
-    } catch (error: any) {
-      setMessage(error.message);
-      setStatus('error');
-    }
-  };
+    return (
+        <div className="p-8 bg-zinc-950 min-h-screen text-zinc-100 font-sans">
+            <div className="max-w-2xl mx-auto space-y-8">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tighter">Project Launcher</h1>
+                    <p className="text-zinc-500">Deploy any repository with a custom domain instantly.</p>
+                </div>
 
-  const handleInjectEnv = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setStatus('loading');
-    try {
-      const res = await fetch(`${baseUrl}/api/env`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName,
-          envVars: { [envKey]: envValue }
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setMessage('Secrets injected. Process securely rebooted.');
-      setStatus('success');
-      setEnvKey('');
-      setEnvValue('');
-    } catch (error: any) {
-      setMessage(error.message);
-      setStatus('error');
-    }
-  };
+                <form onSubmit={handleDeploy} className="space-y-4 bg-zinc-900 p-6 rounded-2xl border border-zinc-800 shadow-2xl">
+                    <div className="space-y-2">
+                        <label className="text-xs uppercase tracking-widest text-zinc-500 font-bold">Project Name</label>
+                        <input 
+                            type="text" 
+                            placeholder="e.g. branding-site"
+                            className="w-full bg-black border border-zinc-800 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                            value={projectData.projectName}
+                            onChange={(e) => setProjectData({...projectData, projectName: e.target.value})}
+                            required
+                        />
+                    </div>
 
-  const handleFetchLogs = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setStatus('loading');
-    try {
-      const res = await fetch(`${baseUrl}/api/logs/${projectName}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setLogs(data.logs);
-      setStatus('success');
-      setMessage('Live server logs retrieved.');
-    } catch (error: any) {
-      setMessage(error.message);
-      setStatus('error');
-    }
-  };
+                    <div className="space-y-2">
+                        <label className="text-xs uppercase tracking-widest text-zinc-500 font-bold">GitHub Repo URL</label>
+                        <input 
+                            type="url" 
+                            placeholder="https://github.com/user/repo"
+                            className="w-full bg-black border border-zinc-800 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                            value={projectData.repoUrl}
+                            onChange={(e) => setProjectData({...projectData, repoUrl: e.target.value})}
+                            required
+                        />
+                    </div>
 
-  return (
-    <div className="max-w-3xl mx-auto p-6 bg-[#0E1117] text-white rounded-xl shadow-2xl border border-gray-800 font-sans mt-8">
-      <div className="flex border-b border-gray-800 mb-6 pb-2 gap-6">
-        <button onClick={() => { setActiveView('deploy'); setStatus('idle'); }} className={`pb-2 font-medium ${activeView === 'deploy' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Deploy App</button>
-        <button onClick={() => { setActiveView('env'); setStatus('idle'); }} className={`pb-2 font-medium ${activeView === 'env' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Secrets Manager</button>
-        <button onClick={() => { setActiveView('logs'); setStatus('idle'); }} className={`pb-2 font-medium ${activeView === 'logs' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>Terminal Logs</button>
-      </div>
+                    <div className="space-y-2">
+                        <label className="text-xs uppercase tracking-widest text-zinc-500 font-bold">Custom Domain (Optional)</label>
+                        <input 
+                            type="text" 
+                            placeholder="whisperedinsilk.com"
+                            className="w-full bg-black border border-zinc-800 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+                            value={projectData.domain}
+                            onChange={(e) => setProjectData({...projectData, domain: e.target.value})}
+                        />
+                    </div>
 
-      {activeView === 'deploy' && (
-        <form onSubmit={handleDeployBackend} className="space-y-4">
-          <p className="text-sm text-gray-400 mb-4">Pull a heavy Node.js backend from GitHub and assign it a PM2 port.</p>
-          <div className="grid grid-cols-2 gap-4">
-            <input type="text" placeholder="Project Name (e.g. epiclips-api)" value={projectName} onChange={e => setProjectName(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white" />
-            <input type="text" placeholder="GitHub Repo (e.g. EpiClips)" value={githubRepo} onChange={e => setGithubRepo(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white" />
-            <input type="number" placeholder="Internal Port (e.g. 5001)" value={targetPort} onChange={e => setTargetPort(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white col-span-2" />
-          </div>
-          <button type="submit" className="w-full py-3 mt-2 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium">Provision Backend</button>
-        </form>
-      )}
+                    <button 
+                        type="submit" 
+                        disabled={status.loading}
+                        className={`w-full py-4 rounded-xl font-bold tracking-tight transition-all ${
+                            status.loading ? 'bg-zinc-800 text-zinc-500' : 'bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-900/20'
+                        }`}
+                    >
+                        {status.loading ? 'Orchestrating...' : 'Launch Project'}
+                    </button>
+                </form>
 
-      {activeView === 'env' && (
-        <form onSubmit={handleInjectEnv} className="space-y-4">
-          <p className="text-sm text-gray-400 mb-4">Securely inject environment variables without logging into the server.</p>
-          <input type="text" placeholder="Target Project Name (e.g. epiclips-api)" value={projectName} onChange={e => setProjectName(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white" />
-          <div className="grid grid-cols-2 gap-4">
-            <input type="text" placeholder="Key (e.g. STRIPE_SECRET)" value={envKey} onChange={e => setEnvKey(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white" />
-            <input type="password" placeholder="Value (e.g. sk_live_...)" value={envValue} onChange={e => setEnvValue(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white" />
-          </div>
-          <button type="submit" className="w-full py-3 mt-2 bg-purple-600 hover:bg-purple-500 rounded-lg font-medium">Inject & Restart Target</button>
-        </form>
-      )}
-
-      {activeView === 'logs' && (
-        <form onSubmit={handleFetchLogs} className="space-y-4">
-          <p className="text-sm text-gray-400 mb-4">Pull the last 100 lines of PM2 terminal output for debugging.</p>
-          <div className="flex gap-4">
-            <input type="text" placeholder="Project Name (e.g. epiclips-api)" value={projectName} onChange={e => setProjectName(e.target.value)} required className="w-full bg-[#1A1D24] border border-gray-700 rounded-lg px-4 py-2.5 text-white" />
-            <button type="submit" className="px-6 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium">Fetch</button>
-          </div>
-          {logs && (
-            <div className="mt-4 p-4 bg-black border border-gray-800 rounded-lg overflow-x-auto h-64 overflow-y-auto">
-              <pre className="text-xs text-green-400 font-mono">{logs}</pre>
+                {/* Live Console Output */}
+                <div className="space-y-2">
+                    <h3 className="text-xs uppercase tracking-widest text-zinc-500 font-bold">System Console</h3>
+                    <div className="bg-black border border-zinc-800 rounded-xl p-4 h-64 overflow-y-auto font-mono text-sm">
+                        {status.error && <p className="text-red-500">Error: {status.error}</p>}
+                        {status.logs && <pre className="text-emerald-400 whitespace-pre-wrap">{status.logs}</pre>}
+                        {!status.logs && !status.error && <p className="text-zinc-700">Waiting for trigger...</p>}
+                    </div>
+                </div>
             </div>
-          )}
-        </form>
-      )}
-
-      {status === 'success' && <div className="mt-4 p-3 bg-green-500/10 border border-green-500/30 text-green-400 rounded-lg text-sm">{message}</div>}
-      {status === 'error' && <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg text-sm">{message}</div>}
-    </div>
-  );
+        </div>
+    );
 }

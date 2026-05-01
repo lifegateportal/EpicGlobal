@@ -68,7 +68,7 @@ app.post('/api/deploy', async (req, res) => {
 app.post('/api/deploy-backend', async (req, res) => {
   const { projectName, githubUser, githubRepo, targetPort } = req.body;
   
-  // Secure GitHub Token Injection
+  // 1. Secure GitHub Token Logic
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
   const authString = GITHUB_TOKEN ? `${GITHUB_TOKEN}@` : '';
   const repoUrl = `https://${authString}github.com/${githubUser}/${githubRepo}.git`;
@@ -76,16 +76,27 @@ app.post('/api/deploy-backend', async (req, res) => {
   const deployPath = path.join(os.homedir(), 'deployments', projectName);
 
   try {
-    if (!fs.existsSync(path.join(os.homedir(), 'deployments'))) fs.mkdirSync(path.join(os.homedir(), 'deployments'));
-    if (fs.existsSync(deployPath)) await execPromise(`rm -rf ${deployPath}`);
+    // 2. Hard Cleanup: Ensure we have a clean slate to prevent ENOTEMPTY errors
+    if (!fs.existsSync(path.join(os.homedir(), 'deployments'))) {
+      fs.mkdirSync(path.join(os.homedir(), 'deployments'), { recursive: true });
+    }
+    if (fs.existsSync(deployPath)) {
+      await execPromise(`rm -rf ${deployPath}`);
+    }
 
-    await execPromise(`git clone ${repoUrl} ${deployPath}`);
-    await execPromise(`cd ${deployPath} && npm install`);
+    // 3. Shallow Clone: --depth 1 saves massive amounts of RAM and Disk
+    await execPromise(`git clone --depth 1 ${repoUrl} ${deployPath}`);
+    
+    // 4. Lean Installation: No audit/fund checks to keep CPU usage low
+    await execPromise(`cd ${deployPath} && npm install --no-audit --no-fund`);
+    
+    // 5. PM2 Ignition
     await execPromise(`cd ${deployPath} && PORT=${targetPort} pm2 start server.js --name "${projectName}" --update-env`);
     await execPromise(`pm2 save`);
 
     res.status(200).json({ message: 'Backend successfully deployed.', port: targetPort });
   } catch (error) {
+    console.error('Deployment Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -103,10 +114,9 @@ app.post('/api/env', async (req, res) => {
       envString += `${key}="${value}"\n`;
     }
     
-    // Write the .env file
     fs.writeFileSync(path.join(deployPath, '.env'), envString);
     
-    // Restart PM2 to inject the new secrets
+    // Restart to apply new env vars
     await execPromise(`cd ${deployPath} && pm2 restart "${projectName}" --update-env`);
     await execPromise(`pm2 save`);
 
@@ -136,7 +146,7 @@ io.on('connection', (socket) => {
     socket.emit('telemetry', {
         ram: Math.round((usedMem / totalMem) * 100),
         cpu: Math.min(Math.round((os.loadavg()[0] / os.cpus().length) * 100), 100),
-        timestamp: Date.now()
+        timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
     });
   }, 2500);
 
@@ -146,5 +156,5 @@ io.on('connection', (socket) => {
 // Boot the Engine
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
-    console.log(`[system] EpicGlobal API Hub successfully engaged on port ${PORT}`);
+    console.log(`\x1b[32m[system]\x1b[0m EpicGlobal Engine engaged on port ${PORT}`);
 });
