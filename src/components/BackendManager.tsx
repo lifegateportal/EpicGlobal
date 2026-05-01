@@ -13,7 +13,8 @@ export default function ProjectOrchestrator() {
         setStatus({ loading: true, logs: '🚀 Initiating remote orchestration...', error: '' });
 
         try {
-            const response = await fetch('http://178.128.158.90:4000/api/orchestrator/deploy', {
+            // UPDATED: Now hitting the secure Caddy gateway instead of the raw IP
+            const response = await fetch('https://api.epicglobal.app/api/orchestrator/deploy', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(projectData)
@@ -31,7 +32,11 @@ export default function ProjectOrchestrator() {
                 setStatus({ loading: false, logs: '', error: data.error });
             }
         } catch (err) {
-            setStatus({ loading: false, logs: '', error: 'Network Error: Check if Port 4000 is open.' });
+            setStatus({ 
+                loading: false, 
+                logs: '', 
+                error: 'Connection Failed: Ensure api.epicglobal.app is pointed to your server IP in DNS.' 
+            });
         }
     };
 
