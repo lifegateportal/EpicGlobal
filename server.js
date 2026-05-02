@@ -1204,6 +1204,93 @@ app.get('/api/logs/:projectName', async (req, res) => {
 });
 
 // ---------------------------------------------------------
+// HELPER: Reconcile PM2 <-> Registry <-> Caddyfile
+// Reads live PM2 process list, finds each process's listening port,
+// merges into registry, and rewrites Caddyfile so every project resolves.
+// ---------------------------------------------------------
+async function reconcileRegistryWithPM2() {
+  let processes = [];
+  try {
+    const { stdout } = await execPromise('pm2 jlist');
+    processes = JSON.parse(stdout || '[]');
+  } catch (e) {
+    return { synced: 0, errors: [e.message] };
+  }
+
+  const registry = getRegistry();
+  const skipNames = new Set(['epicglobal-api']);
+  let synced = 0;
+  const errors = [];
+
+  for (const proc of processes) {
+    const name = String(proc.name || '').trim();
+    if (!name || skipNames.has(name)) continue;
+
+    // Derive port: prefer registry, then parse from PM2 exec args
+    let port = registry.projects[name] ? registry.projects[name].port : null;
+
+    if (!port) {
+      const args = Array.isArray(proc.pm2_env?.args)
+        ? proc.pm2_env.args.join(' ')
+        : String(proc.pm2_env?.args || '');
+      const m = args.match(/-l\s*(\d{4,5})|--port[=\s](\d{4,5})|(\d{4,5})\s*$/);
+      if (m) port = parseInt(m[1] || m[2] || m[3]);
+    }
+
+    // Last resort: check ss output for this pid
+    if (!port && proc.pid) {
+      try {
+        const { stdout: ssOut } = await execPromise('ss -tlnp | grep pid=' + proc.pid);
+        const sm = ssOut.match(/:(\d{4,5})\s/);
+        if (sm) port = parseInt(sm[1]);
+      } catch (e) {}
+    }
+
+    if (!port) { errors.push(name + ': port not found'); continue; }
+
+    if (!registry.projects[name]) {
+      registry.projects[name] = { port, repoUrl: '', domain: '' };
+      synced++;
+    } else if (registry.projects[name].port !== port) {
+      registry.projects[name].port = port;
+      synced++;
+    }
+  }
+
+  saveRegistry(registry);
+
+  try {
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+  } catch (e) {
+    errors.push('caddy reload: ' + e.message);
+  }
+
+  return { synced, total: Object.keys(registry.projects).length, errors };
+}
+
+// ---------------------------------------------------------
+// API: Repair — reconcile PM2/registry/Caddy
+// ---------------------------------------------------------
+app.post('/api/orchestrator/repair', async (req, res) => {
+  try {
+    const result = await reconcileRegistryWithPM2();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/orchestrator/repair', async (req, res) => {
+  try {
+    const result = await reconcileRegistryWithPM2();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
 // API: Nuclear Cleanup (Delete All Deployments)
 // ---------------------------------------------------------
 app.post('/api/orchestrator/cleanup', async (req, res) => {
@@ -1439,4 +1526,12 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------
 server.listen(PORT, () => {
   console.log('\x1b[32m[system]\x1b[0m EpicGlobal Orchestrator v3 engaged on port ' + PORT);
+
+  // Auto-reconcile PM2 <-> registry <-> Caddyfile on every boot.
+  // Runs after a short delay so PM2 processes have time to register ports.
+  setTimeout(() => {
+    reconcileRegistryWithPM2()
+      .then((r) => console.log('\x1b[32m[repair]\x1b[0m Startup reconcile: synced=' + r.synced + ' total=' + r.total + (r.errors.length ? ' errors=' + r.errors.join(',') : '')))
+      .catch((e) => console.error('\x1b[31m[repair]\x1b[0m Startup reconcile failed:', e.message));
+  }, 5000);
 });

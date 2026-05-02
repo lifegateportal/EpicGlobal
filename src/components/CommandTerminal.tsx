@@ -37,13 +37,23 @@ export function CommandTerminal({ isOpen, onClose }: { isOpen: boolean, onClose:
     setAutoScroll(true);
   };
 
-  // Syntax Highlighter
-  const formatLog = (log: string) => {
+  // Safe syntax highlighter — returns React nodes, no raw HTML injection
+  const formatLog = (log: string): React.ReactNode => {
     if (log.startsWith('>')) return <span className="text-zinc-100 font-bold">{log}</span>;
     if (log.toLowerCase().includes('error')) return <span className="text-red-400">{log}</span>;
     if (log.includes('[agent]')) return <span className="text-purple-400">{log}</span>;
     if (log.includes('/src/')) {
-      return <span>{log.replace(/(\/src\/[\w./-]+)/g, (match) => `<span class="text-blue-400 underline cursor-pointer">${match}</span>`)}</span>;
+      const srcPattern = /(\/src\/[\w./-]+)/g;
+      const parts = log.split(srcPattern);
+      return (
+        <span>
+          {parts.map((part, i) =>
+            /^\/src\/[\w./-]+$/.test(part)
+              ? <span key={i} className="text-blue-400 underline cursor-pointer">{part}</span>
+              : part
+          )}
+        </span>
+      );
     }
     return <span>{log}</span>;
   };
@@ -68,7 +78,7 @@ export function CommandTerminal({ isOpen, onClose }: { isOpen: boolean, onClose:
 
             <div className="relative flex-1 overflow-hidden">
               <div ref={scrollRef} onScroll={handleScroll} className="absolute inset-0 p-4 overflow-y-auto font-mono text-xs text-zinc-400 space-y-2 pb-10">
-                {logs.map((log, i) => <div key={i} dangerouslySetInnerHTML={{ __html: formatLog(log)?.props?.children || log }} />)}
+                {logs.map((log, i) => <div key={i}>{formatLog(log)}</div>)}
               </div>
               
               {!autoScroll && (

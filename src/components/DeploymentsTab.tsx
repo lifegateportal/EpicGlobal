@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 
 export function DeploymentsTab({ deployments }: { deployments: any[] }) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   const handleCopy = (e: React.MouseEvent, text: string, id: string) => {
     e.stopPropagation();
@@ -19,11 +20,16 @@ export function DeploymentsTab({ deployments }: { deployments: any[] }) {
       <div className="p-4 border-b border-zinc-800/60 flex justify-between items-center bg-zinc-900/20">
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-          <input type="text" placeholder="Search deployments..." className="bg-black border border-zinc-800 rounded-md py-1.5 pl-9 pr-4 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 w-64" />
+          <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search deployments..." className="bg-black border border-zinc-800 rounded-md py-1.5 pl-9 pr-4 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 w-64" />
         </div>
       </div>
       <div className="divide-y divide-zinc-800/60 overflow-hidden">
-        {deployments.map((deploy) => {
+        {deployments
+          .filter(({ commit, branch, hash }) => {
+            const q = query.toLowerCase();
+            return !q || commit?.toLowerCase().includes(q) || branch?.toLowerCase().includes(q) || hash?.toLowerCase().includes(q);
+          })
+          .map((deploy) => {
           const isLargeBundle = deploy.bundleSize > 4;
           
           return (

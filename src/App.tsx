@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Lock } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
-import { io } from 'socket.io-client';
 import { Navbar } from './components/Navbar';
 import { OverviewTab } from './components/OverviewTab';
 import { DeploymentsTab } from './components/DeploymentsTab';
@@ -11,27 +10,9 @@ import { CommandPalette } from './components/CommandPalette';
 import { KeyboardHUD } from './components/KeyboardHUD';
 import DeploymentDashboard from './components/DeploymentDashboard';
 import BackendManager from './components/BackendManager';
+import { useTelemetry } from './hooks/useTelemetry';
 
-const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
-
-type TelemetryPoint = { time: string; cpu: number; ram: number };
-
-function clampPercent(value: unknown) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
-  if (n < 0) return 0;
-  if (n > 100) return 100;
-  return Math.round(n);
-}
-
-function normalizeTelemetry(payload: any): TelemetryPoint {
-  return {
-    time: String(payload?.timestamp || new Date().toLocaleTimeString('en-GB', { hour12: false })),
-    cpu: clampPercent(payload?.cpu),
-    ram: clampPercent(payload?.ram)
-  };
-}
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -43,115 +24,9 @@ export default function App() {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  const socketUrl = configuredSocketUrl || window.location.origin;
-  
-  // LIVE TELEMETRY STATE
-  const [serverConnected, setServerConnected] = useState(false);
-  const [connectionStatusLabel, setConnectionStatusLabel] = useState('Disconnected');
-  const [connectionStatusDetail, setConnectionStatusDetail] = useState(`Telemetry endpoint: ${socketUrl}`);
-  const [performanceData, setPerformanceData] = useState<TelemetryPoint[]>([
-    { time: '00:00', cpu: 0, ram: 0 }
-  ]);
 
-  const appendTelemetryPoint = (point: TelemetryPoint) => {
-    setPerformanceData((prev) => {
-      const newData = [...prev, point];
-      if (newData.length > 15) newData.shift();
-      return newData;
-    });
-  };
-
-  // Establish WebSocket Connection
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    let hasShownConnectError = false;
-    setConnectionStatusLabel('Connecting');
-    setConnectionStatusDetail(`Connecting to ${socketUrl}`);
-
-    const socket = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      timeout: 10000,
-      autoConnect: false,
-    });
-
-    socket.on('connect', () => {
-      setServerConnected(true);
-      setConnectionStatusLabel('Connected');
-      setConnectionStatusDetail(`Connected to ${socketUrl}`);
-      toast.success('Secure link established to nyc-1.');
-    });
-
-    socket.on('disconnect', (reason) => {
-      setServerConnected(false);
-      setConnectionStatusLabel('Disconnected');
-      setConnectionStatusDetail(`Socket closed: ${reason}`);
-      toast.error(`Connection to nyc-1 lost: ${reason}.`);
-    });
-
-    socket.on('connect_error', (error) => {
-      const message = error.message || 'Unknown connection error';
-      setServerConnected(false);
-      setConnectionStatusLabel('Disconnected');
-      setConnectionStatusDetail(`Unable to reach ${socketUrl}: ${message}`);
-      console.error('Socket connection failed', { socketUrl, message, error });
-
-      if (!hasShownConnectError) {
-        toast.error(`Telemetry unavailable: ${message}.`);
-        hasShownConnectError = true;
-      }
-    });
-
-    socket.io.on('reconnect_attempt', (attempt) => {
-      setConnectionStatusLabel('Connecting');
-      setConnectionStatusDetail(`Retrying ${socketUrl} (attempt ${attempt})`);
-    });
-
-    // Catch the live stream and feed the chart
-    socket.on('telemetry', (data) => {
-      appendTelemetryPoint(normalizeTelemetry(data));
-    });
-
-    // Connect only after handlers are fully attached to avoid missing first telemetry payload.
-    socket.connect();
-
-    socket.on('connect', () => {
-      socket.emit('telemetry_request');
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [isAuthenticated, socketUrl]);
-
-  // Fallback telemetry polling for environments where websocket events are blocked/intermittent.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    let cancelled = false;
-
-    const pollTelemetry = async () => {
-      try {
-        const res = await fetch(socketUrl + '/api/orchestrator/telemetry?ts=' + Date.now(), {
-          cache: 'no-store'
-        });
-        const data = await res.json();
-        if (!cancelled && data?.success && data?.telemetry) {
-          appendTelemetryPoint(normalizeTelemetry(data.telemetry));
-        }
-      } catch (e) {
-        // Silent fallback failure; websocket may still be active.
-      }
-    };
-
-    pollTelemetry();
-    const interval = setInterval(pollTelemetry, 5000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [isAuthenticated, socketUrl]);
+  const { serverConnected, connectionStatusLabel, connectionStatusDetail, performanceData } =
+    useTelemetry(isAuthenticated);
 
   // Local-First Cache Simulation & Focus Throttling
   useEffect(() => {

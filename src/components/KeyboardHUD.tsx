@@ -49,8 +49,16 @@ export function KeyboardHUD() {
                 <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs font-mono text-zinc-300">2</kbd>
               </div>
               <div className="flex justify-between items-center border-b border-zinc-800/50 pb-2">
-                <span className="text-zinc-400 text-sm">Navigate to Settings</span>
+                <span className="text-zinc-400 text-sm">Navigate to Edge</span>
                 <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs font-mono text-zinc-300">3</kbd>
+              </div>
+              <div className="flex justify-between items-center border-b border-zinc-800/50 pb-2">
+                <span className="text-zinc-400 text-sm">Navigate to Orchestrator</span>
+                <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs font-mono text-zinc-300">4</kbd>
+              </div>
+              <div className="flex justify-between items-center border-b border-zinc-800/50 pb-2">
+                <span className="text-zinc-400 text-sm">Navigate to Settings</span>
+                <kbd className="px-2 py-1 bg-zinc-900 border border-zinc-800 rounded text-xs font-mono text-zinc-300">5</kbd>
               </div>
               <div className="flex justify-between items-center border-b border-zinc-800/50 pb-2">
                 <span className="text-zinc-400 text-sm">Show this overlay</span>

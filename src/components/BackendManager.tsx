@@ -2,60 +2,8 @@ import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
-
-const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
-const SOCKET_URL = configuredSocketUrl || window.location.origin;
-const API = SOCKET_URL.replace(/\/$/, '');
-
-type ProjectHealth = {
-  status: 'online' | 'stopped' | 'errored' | 'launching' | string;
-  uptime: number | null;
-  restarts: number;
-  memory: number;
-  cpu: number;
-};
-
-type Project = {
-  port: number;
-  repoUrl: string;
-  domain?: string;
-  health: ProjectHealth;
-};
-
-type HistoryEntry = {
-  id: number;
-  projectName: string;
-  status: 'success' | 'failed' | 'deleted';
-  timestamp: string;
-  details: Record<string, string | number> & { strategy?: string };
-};
-
-type QueueSnapshot = {
-  running: { id: string; projectName: string; startedAt: string } | null;
-  queued: Array<{ id: string; projectName: string; enqueuedAt: string; position: number }>;
-  totalQueued: number;
-};
-
-type BackupManifest = {
-  backupId: string;
-  createdAt: string | null;
-  includeDeployments: boolean;
-};
-
-type WatchdogEntry = {
-  status: 'ok' | 'failing' | 'healed' | 'down';
-  url: string;
-  checkedAt: string;
-  healedAt?: string;
-  lastError?: string;
-  consecutiveFails?: number;
-};
-
-type AlertConfig = {
-  telegram: boolean;
-  discord: boolean;
-  telegramChatId: string | null;
-};
+import { BASE_URL, API } from '../api/client';
+import type { Project, HistoryEntry, QueueSnapshot, BackupManifest, WatchdogEntry, AlertConfig } from '../types';
 
 function StatusBadge({ status }: { status: string }) {
   if (status === 'online') return <span className="flex items-center gap-1.5 text-green-400 text-xs font-medium"><CheckCircle2 size={12} /> Online</span>;
@@ -273,6 +221,25 @@ export default function ProjectOrchestrator() {
     } catch {}
   };
 
+  const runRepair = async () => {
+    setActionLoading('repair');
+    try {
+      const res = await fetch(API + '/api/orchestrator/repair', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Repair complete. Synced ' + data.synced + ' project(s). Caddy reloaded.');
+        fetchStatus();
+        fetchHistory();
+      } else {
+        toast.error(data.error || 'Repair failed.');
+      }
+    } catch {
+      toast.error('Could not reach API.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const sendTestAlert = async () => {
     setActionLoading('alert-test');
     try {
@@ -305,7 +272,7 @@ export default function ProjectOrchestrator() {
     }, 15000);
 
     // Real-time watchdog events over socket
-    const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'] });
+    const socket = io(BASE_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
     socket.on('watchdog_state', (state: Record<string, WatchdogEntry>) => {
@@ -736,9 +703,19 @@ export default function ProjectOrchestrator() {
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
         <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-zinc-100">Live Projects <span className="text-zinc-600 font-normal ml-1">({projectList.length})</span></h2>
-          <button onClick={fetchStatus} className="text-zinc-500 hover:text-zinc-300 transition-colors" title="Refresh">
-            <RefreshCw size={14} />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={runRepair}
+              disabled={actionLoading === 'repair'}
+              className="h-7 px-3 rounded-md text-xs font-semibold bg-amber-700 hover:bg-amber-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white"
+              title="Sync PM2 processes → registry → Caddy routes"
+            >
+              {actionLoading === 'repair' ? 'Repairing...' : 'Repair Routing'}
+            </button>
+            <button onClick={fetchStatus} className="text-zinc-500 hover:text-zinc-300 transition-colors" title="Refresh">
+              <RefreshCw size={14} />
+            </button>
+          </div>
         </div>
 
         {loadingProjects ? (
