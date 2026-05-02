@@ -137,8 +137,12 @@ export function DeploymentsTab() {
     try {
       const res  = await fetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}/apply`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) toast.success('Secrets injected and process restarted.');
-      else toast.error(data.error || 'Failed to apply secrets.');
+      if (data.success) {
+        toast.success(data.message || 'Secrets applied and process restarted.');
+        loadVaultPreview(name);
+      } else {
+        toast.error(data.error || 'Failed to apply secrets.');
+      }
     } catch { toast.error('Could not reach API.'); }
     finally { patchVault(name, { saving: false }); }
   };
@@ -358,7 +362,13 @@ export function DeploymentsTab() {
                         )}
 
                         {/* Footer actions */}
-                        <div className="flex items-center justify-between px-5 py-4 bg-zinc-900/10 border-t border-zinc-800/40">
+                        <div className="flex flex-col gap-2 px-5 py-4 bg-zinc-900/10 border-t border-zinc-800/40">
+                          {storedEntries.some(([k]) => k.startsWith('VITE_') || k.startsWith('REACT_APP_') || k.startsWith('NEXT_PUBLIC_')) && (
+                            <p className="text-[11px] text-amber-500/70">
+                              Public vars (VITE_*, REACT_APP_*, NEXT_PUBLIC_*) require a full rebuild — Apply &amp; Restart will rebuild automatically.
+                            </p>
+                          )}
+                        <div className="flex items-center justify-between">
                           <button
                             onClick={() => addRow(name)}
                             className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 transition-colors font-medium"
@@ -382,6 +392,7 @@ export function DeploymentsTab() {
                               {vault.saving ? 'Saving...' : 'Save'}
                             </button>
                           </div>
+                        </div>
                         </div>
                       </motion.div>
                     )}

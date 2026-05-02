@@ -929,14 +929,65 @@ app.post('/api/orchestrator/secrets/:projectName/apply', async (req, res) => {
       envMap[k] = decryptSecret(encrypted);
     });
 
+    // Always write .env so Node.js apps that call dotenv.config() pick it up.
     fs.writeFileSync(path.join(deployPath, '.env'), buildEnvText(envMap));
-    await execPromise('cd ' + quoteForShell(deployPath) + ' && pm2 restart ' + quoteForShell(projectName) + ' --update-env');
-    await execPromise('pm2 save');
+
+    // Build a safe shell prefix that exports every var into the child environment.
+    // `pm2 restart --update-env` promotes vars from the CALLING PROCESS env into
+    // the stored PM2 process config — so we must export them before the call.
+    const envExports = Object.entries(envMap)
+      .map(([k, v]) => 'export ' + k + '=' + quoteForShell(v))
+      .join(' && ');
+
+    // Detect whether any vars are framework public vars that require a full rebuild
+    // to be baked into the client bundle (Vite: VITE_*, CRA: REACT_APP_*, Next: NEXT_PUBLIC_*).
+    const needsRebuild = Object.keys(envMap).some(
+      (k) => k.startsWith('VITE_') || k.startsWith('REACT_APP_') || k.startsWith('NEXT_PUBLIC_')
+    );
+
+    const registryEntry = registry.projects[projectName];
+    const port = registryEntry ? registryEntry.port : null;
+    const hasDist  = fs.existsSync(path.join(deployPath, 'dist'));
+    const hasBuild = fs.existsSync(path.join(deployPath, 'build'));
+    const hasPackageJson = fs.existsSync(path.join(deployPath, 'package.json'));
+    const isStaticFrontend = (hasDist || hasBuild) && hasPackageJson;
+    const distDir = hasDist ? 'dist' : (hasBuild ? 'build' : null);
+
+    let cmd;
+    let rebuilt = false;
+
+    if (isStaticFrontend && needsRebuild && distDir && port) {
+      // Frontend app: must rebuild to bake VITE_/REACT_APP_/NEXT_PUBLIC_ vars into bundle.
+      rebuilt = true;
+      cmd = 'cd ' + quoteForShell(deployPath) +
+        ' && ' + envExports +
+        ' && npm run build --if-present' +
+        ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
+        ' && ' + envExports +
+        ' && pm2 start ' + quoteForShell('npx serve -s ' + distDir + ' -l ' + port) +
+        ' --name ' + quoteForShell(projectName) +
+        ' --cwd ' + quoteForShell(deployPath) +
+        ' && pm2 save';
+    } else {
+      // Node.js backend app, or static app with server-side-only vars:
+      // export vars into shell → pm2 --update-env stores them in the PM2 process config.
+      cmd = 'cd ' + quoteForShell(deployPath) +
+        ' && ' + envExports +
+        ' && pm2 restart ' + quoteForShell(projectName) + ' --update-env' +
+        ' && pm2 save';
+    }
+
+    const { stdout, stderr } = await execPromise(cmd);
+    const log = [stdout, stderr].filter(Boolean).join('\n').trim();
 
     return res.json({
       success: true,
-      message: 'Secrets applied and process restarted.',
-      totalSecrets: Object.keys(envMap).length
+      message: rebuilt
+        ? 'Rebuilt and restarted with ' + Object.keys(envMap).length + ' variable(s) applied.'
+        : 'Restarted — ' + Object.keys(envMap).length + ' variable(s) injected via PM2.',
+      totalSecrets: Object.keys(envMap).length,
+      rebuilt,
+      log
     });
   } catch (error) {
     return res.status(500).json({
