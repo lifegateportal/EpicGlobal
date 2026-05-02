@@ -108,11 +108,6 @@ export default function App() {
     );
   }
 
-  const deployments = [
-    { id: '1', status: 'ready', branch: 'main', time: '2m', commit: 'Update routing logic', hash: 'a1b2c3d', duration: '45s', bundleSize: 2.1 },
-    { id: '2', status: 'building', branch: 'feature/auth', time: 'Just now', commit: 'Import massive legacy package', hash: 'e5f6g7h', duration: '--', bundleSize: 5.4 },
-  ];
-
   // Structured Tab Array for cleaner rendering and custom labels
   const navTabs = [
     { id: 'overview', label: 'Overview' },
@@ -181,7 +176,7 @@ export default function App() {
               connectionStatusDetail={connectionStatusDetail}
             />
           )}
-          {activeTab === 'deployments' && <DeploymentsTab deployments={deployments} />}
+          {activeTab === 'deployments' && <DeploymentsTab />}
           {activeTab === 'edge' && <DeploymentDashboard />}
           {/* Injecting the new God-Mode Engine Panel */}
           {activeTab === 'orchestrator' && <BackendManager />}
