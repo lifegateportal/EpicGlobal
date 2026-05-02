@@ -15,6 +15,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function ProjectOrchestrator() {
   const [form, setForm] = useState({ projectName: '', repoUrl: '', domain: '' });
   const [deployStatus, setDeployStatus] = useState({ loading: false, logs: '', error: '' });
+  const [deployedUrl, setDeployedUrl] = useState('');
   const [projects, setProjects] = useState<Record<string, Project>>({});
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -297,6 +298,7 @@ export default function ProjectOrchestrator() {
   const handleDeploy = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setDeployStatus({ loading: true, logs: 'Initiating remote orchestration...', error: '' });
+    setDeployedUrl('');
 
     try {
       const res = await fetch(API + '/api/orchestrator/deploy', {
@@ -309,7 +311,8 @@ export default function ProjectOrchestrator() {
       if (data.success) {
         toast.success(form.projectName + ' deployed successfully.');
         const deploymentLog = String(data.log || data.terminalOutput || 'Deployment finished');
-        setDeployStatus({ loading: false, logs: 'Live at: ' + data.url + '\n\n' + deploymentLog, error: '' });
+        setDeployStatus({ loading: false, logs: deploymentLog, error: '' });
+        setDeployedUrl(data.url || '');
         setForm({ projectName: '', repoUrl: '', domain: '' });
         fetchStatus();
         fetchHistory();
@@ -430,9 +433,25 @@ export default function ProjectOrchestrator() {
           </form>
 
           {(deployStatus.logs || deployStatus.error) && (
-            <div className="mt-4 bg-black border border-zinc-800 rounded-lg p-4 h-40 overflow-y-auto font-mono text-xs">
-              {deployStatus.error && <p className="text-red-400">Error: {deployStatus.error}</p>}
-              {deployStatus.logs && <pre className="text-emerald-400 whitespace-pre-wrap">{deployStatus.logs}</pre>}
+            <div className="mt-4 space-y-2">
+              {deployedUrl && (
+                <div className="flex items-center gap-2 bg-emerald-950/30 border border-emerald-800/40 rounded-md px-3 py-2">
+                  <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                  <span className="text-xs text-zinc-400">Live at:</span>
+                  <a
+                    href={deployedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-emerald-400 hover:text-emerald-300 underline truncate"
+                  >
+                    {deployedUrl}
+                  </a>
+                </div>
+              )}
+              <div className="bg-black border border-zinc-800 rounded-lg p-4 h-40 overflow-y-auto font-mono text-xs">
+                {deployStatus.error && <p className="text-red-400">Error: {deployStatus.error}</p>}
+                {deployStatus.logs && <pre className="text-emerald-400 whitespace-pre-wrap">{deployStatus.logs}</pre>}
+              </div>
             </div>
           )}
         </div>

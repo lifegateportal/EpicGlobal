@@ -12,6 +12,7 @@ export default function DeploymentDashboard() {
   
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [resultUrl, setResultUrl] = useState('');
+  const [deploymentTriggered, setDeploymentTriggered] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -41,6 +42,7 @@ export default function DeploymentDashboard() {
       }
 
       setResultUrl(data.projectUrl);
+      setDeploymentTriggered(data.deploymentTriggered === true);
       setStatus('success');
       
       // Reset form fields for the next deployment
@@ -153,7 +155,11 @@ export default function DeploymentDashboard() {
           <CheckCircle2 size={20} className="text-green-500 mt-0.5 shrink-0" />
           <div className="w-full">
             <h4 className="text-green-400 font-medium">Platform Provisioned</h4>
-            <p className="text-green-300/80 text-sm mt-1 mb-2">Your edge network environment is building. It will be live shortly at:</p>
+            <p className="text-green-300/80 text-sm mt-1 mb-2">
+              {deploymentTriggered
+                ? 'A build has been triggered. Your site will be live in 2–5 minutes at:'
+                : 'Project created. Push to your repo or trigger a deployment from the Cloudflare dashboard. It will be live at:'}
+            </p>
             <a href={resultUrl} target="_blank" rel="noopener noreferrer" className="block w-full bg-[#0E1117] text-blue-400 border border-green-500/30 rounded px-3 py-2 text-sm hover:text-blue-300 hover:border-green-500/50 transition-colors truncate">
               {resultUrl}
             </a>

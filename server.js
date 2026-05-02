@@ -507,6 +507,28 @@ async function executeOrchestratorDeploy(payload) {
     } else {
       // ---- FIRST-DEPLOY PATH ----
       output = await executeFirstDeploy(projectName, repoUrl, domain, port);
+
+      // Health probe — give the serve process up to 15s to start responding.
+      const healthy = await probeHealth(port, 5, 3000);
+      if (!healthy) {
+        // PM2 started but serve isn't responding — tear down and fail cleanly.
+        try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
+        try { await execPromise('rm -rf ' + quoteForShell(path.join(DEPLOY_ROOT, projectName))); } catch (_) {}
+        const registry2 = getRegistry();
+        delete registry2.projects[projectName];
+        saveRegistry(registry2);
+        appendHistory(projectName, 'failed', { error: 'Process started but did not respond on port ' + port + ' after 15 s.', repoUrl, strategy: 'first-deploy' });
+        throw {
+          statusCode: 502,
+          body: {
+            success: false,
+            port,
+            error: 'The app started but did not respond within 15 s. Check that your project has a build step that produces a servable output (dist/ or build/ folder with index.html), or that the server process binds to the expected port.',
+            terminalOutput: output
+          }
+        };
+      }
+      output += '\n[health] Service responding on port ' + port + '. Deployment confirmed live.';
     }
 
     const finalRegistry = getRegistry();
@@ -643,9 +665,29 @@ app.post('/api/deploy', async (req, res) => {
       throw new Error(data.errors[0]?.message || 'Cloudflare API error');
     }
 
+    // Trigger the first build/deployment so the URL isn't blank on first visit.
+    let deploymentTriggered = false;
+    try {
+      const triggerRes = await fetch(
+        'https://api.cloudflare.com/client/v4/accounts/' + CF_ACCOUNT_ID + '/pages/projects/' + encodeURIComponent(projectName) + '/deployments',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + CF_API_TOKEN
+          }
+        }
+      );
+      const triggerData = await triggerRes.json();
+      deploymentTriggered = triggerData.success === true;
+    } catch (_) {
+      // Non-fatal — GitHub App may not be installed yet; webhook will trigger on next push.
+    }
+
     res.json({
       success: true,
       projectUrl: 'https://' + projectName + '.pages.dev',
+      deploymentTriggered,
       details: data.result
     });
   } catch (error) {
