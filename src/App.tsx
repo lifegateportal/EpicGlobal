@@ -15,6 +15,24 @@ import BackendManager from './components/BackendManager';
 const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
 
+type TelemetryPoint = { time: string; cpu: number; ram: number };
+
+function clampPercent(value: unknown) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return Math.round(n);
+}
+
+function normalizeTelemetry(payload: any): TelemetryPoint {
+  return {
+    time: String(payload?.timestamp || new Date().toLocaleTimeString('en-GB', { hour12: false })),
+    cpu: clampPercent(payload?.cpu),
+    ram: clampPercent(payload?.ram)
+  };
+}
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return sessionStorage.getItem('eg_auth') === 'true';
@@ -31,9 +49,17 @@ export default function App() {
   const [serverConnected, setServerConnected] = useState(false);
   const [connectionStatusLabel, setConnectionStatusLabel] = useState('Disconnected');
   const [connectionStatusDetail, setConnectionStatusDetail] = useState(`Telemetry endpoint: ${socketUrl}`);
-  const [performanceData, setPerformanceData] = useState<{time: string, cpu: number, ram: number}[]>([
+  const [performanceData, setPerformanceData] = useState<TelemetryPoint[]>([
     { time: '00:00', cpu: 0, ram: 0 }
   ]);
+
+  const appendTelemetryPoint = (point: TelemetryPoint) => {
+    setPerformanceData((prev) => {
+      const newData = [...prev, point];
+      if (newData.length > 15) newData.shift();
+      return newData;
+    });
+  };
 
   // Establish WebSocket Connection
   useEffect(() => {
@@ -44,8 +70,9 @@ export default function App() {
     setConnectionStatusDetail(`Connecting to ${socketUrl}`);
 
     const socket = io(socketUrl, {
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       timeout: 10000,
+      autoConnect: false,
     });
 
     socket.on('connect', () => {
@@ -82,15 +109,47 @@ export default function App() {
 
     // Catch the live stream and feed the chart
     socket.on('telemetry', (data) => {
-      setPerformanceData(prev => {
-        const newData = [...prev, { time: data.timestamp, cpu: data.cpu, ram: data.ram }];
-        if (newData.length > 15) newData.shift();
-        return newData;
-      });
+      appendTelemetryPoint(normalizeTelemetry(data));
+    });
+
+    // Connect only after handlers are fully attached to avoid missing first telemetry payload.
+    socket.connect();
+
+    socket.on('connect', () => {
+      socket.emit('telemetry_request');
     });
 
     return () => {
       socket.disconnect();
+    };
+  }, [isAuthenticated, socketUrl]);
+
+  // Fallback telemetry polling for environments where websocket events are blocked/intermittent.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let cancelled = false;
+
+    const pollTelemetry = async () => {
+      try {
+        const res = await fetch(socketUrl + '/api/orchestrator/telemetry?ts=' + Date.now(), {
+          cache: 'no-store'
+        });
+        const data = await res.json();
+        if (!cancelled && data?.success && data?.telemetry) {
+          appendTelemetryPoint(normalizeTelemetry(data.telemetry));
+        }
+      } catch (e) {
+        // Silent fallback failure; websocket may still be active.
+      }
+    };
+
+    pollTelemetry();
+    const interval = setInterval(pollTelemetry, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
     };
   }, [isAuthenticated, socketUrl]);
 

@@ -6,6 +6,7 @@ const path = require('path');
 const os = require('os');
 const util = require('util');
 const http = require('http');
+const crypto = require('crypto');
 const { Server } = require('socket.io');
 
 const execPromise = util.promisify(exec);
@@ -16,25 +17,39 @@ const execPromise = util.promisify(exec);
 const DEPLOY_ROOT = '/var/www/epic-deployments';
 const REGISTRY_PATH = path.join(process.cwd(), 'projects.json');
 const HISTORY_PATH = path.join(process.cwd(), 'deploy-history.json');
+const VAULT_PATH = path.join(process.cwd(), 'secrets-vault.json');
+const BACKUP_ROOT = path.join(process.cwd(), 'orchestrator-backups');
 const CADDYFILE_PATH = '/etc/caddy/Caddyfile';
 const PORT = process.env.PORT || 4000;
 // Blue-green: candidate port offset - each project's canary runs at port + this value
 const CANDIDATE_PORT_OFFSET = 1000;
+const DEFAULT_VAULT_MASTER_KEY = 'epicglobal-dev-master-key-change-me';
 
 // Single-worker deploy queue to prevent overlapping deploys on one VPS.
 const deployQueue = [];
 let activeDeploy = null;
+let latestTelemetry = {
+  ram: 0,
+  cpu: 0,
+  timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
+};
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [
-      'http://localhost:5173',
-      'https://epicglobal.app',
-      'https://www.epicglobal.app',
-      'https://api.epicglobal.app'
-    ],
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowed = [
+        'http://localhost:5173',
+        'https://epicglobal.app',
+        'https://www.epicglobal.app',
+        'https://api.epicglobal.app'
+      ];
+      const isGithubPreview = /https:\/\/.*\.app\.github\.dev$/.test(origin);
+      const isAllowed = allowed.includes(origin) || isGithubPreview;
+      callback(isAllowed ? null : new Error('Origin not allowed by CORS'), isAllowed);
+    },
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -44,12 +59,18 @@ const io = new Server(server, {
 // MIDDLEWARE
 // ---------------------------------------------------------
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'https://epicglobal.app',
-    'https://www.epicglobal.app',
-    'https://api.epicglobal.app'
-  ],
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    const allowed = [
+      'http://localhost:5173',
+      'https://epicglobal.app',
+      'https://www.epicglobal.app',
+      'https://api.epicglobal.app'
+    ];
+    const isGithubPreview = /https:\/\/.*\.app\.github\.dev$/.test(origin);
+    const isAllowed = allowed.includes(origin) || isGithubPreview;
+    callback(isAllowed ? null : new Error('Origin not allowed by CORS'), isAllowed);
+  },
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -124,6 +145,91 @@ function getHistory() {
   } catch {
     return [];
   }
+}
+
+function ensureBackupRoot() {
+  if (!fs.existsSync(BACKUP_ROOT)) {
+    fs.mkdirSync(BACKUP_ROOT, { recursive: true });
+  }
+}
+
+function getVaultMasterKey() {
+  return String(process.env.VAULT_MASTER_KEY || DEFAULT_VAULT_MASTER_KEY);
+}
+
+function getVault() {
+  if (!fs.existsSync(VAULT_PATH)) {
+    return { projects: {} };
+  }
+  try {
+    return JSON.parse(fs.readFileSync(VAULT_PATH, 'utf8'));
+  } catch (e) {
+    console.error('Vault parse error:', e);
+    return { projects: {} };
+  }
+}
+
+function saveVault(vault) {
+  try {
+    fs.writeFileSync(VAULT_PATH, JSON.stringify(vault, null, 2));
+  } catch (e) {
+    console.error('Vault write error:', e);
+  }
+}
+
+function encryptSecret(value) {
+  const key = crypto.createHash('sha256').update(getVaultMasterKey()).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    data: encrypted.toString('base64')
+  };
+}
+
+function decryptSecret(enc) {
+  const key = crypto.createHash('sha256').update(getVaultMasterKey()).digest();
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    key,
+    Buffer.from(enc.iv, 'base64')
+  );
+  decipher.setAuthTag(Buffer.from(enc.tag, 'base64'));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(enc.data, 'base64')),
+    decipher.final()
+  ]);
+  return decrypted.toString('utf8');
+}
+
+function maskSecret(value) {
+  const str = String(value || '');
+  if (str.length <= 4) return '****';
+  return str.slice(0, 2) + '****' + str.slice(-2);
+}
+
+function parseEnvText(envText) {
+  const map = {};
+  String(envText || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && line.includes('='))
+    .forEach((line) => {
+      const idx = line.indexOf('=');
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      if (key) map[key] = value;
+    });
+  return map;
+}
+
+function buildEnvText(envMap) {
+  return Object.entries(envMap)
+    .map(([k, v]) => k + '=' + JSON.stringify(String(v)))
+    .join('\n') + '\n';
 }
 
 function appendHistory(projectName, status, details) {
@@ -409,6 +515,7 @@ async function executeOrchestratorDeploy(payload) {
 
     const strategy = existingProject ? 'blue-green' : 'first-deploy';
     appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl, strategy: strategy });
+    sendAlert('deploy', projectName, 'Deployed successfully. Live at ' + url + ' (strategy: ' + strategy + ')', 'success').catch(() => {});
 
     return {
       success: true,
@@ -421,6 +528,7 @@ async function executeOrchestratorDeploy(payload) {
     if (error.statusCode) throw error;
     const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
     appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl });
+    sendAlert('deploy', projectName, 'Deploy FAILED: ' + (output.slice(0, 200) || 'unknown error'), 'error').catch(() => {});
 
     throw {
       statusCode: 500,
@@ -444,15 +552,28 @@ setInterval(() => {
     const usedMem = totalMem - freeMem;
     const cpuLoad = os.loadavg()[0] / os.cpus().length;
 
-    io.emit('telemetry', {
+    latestTelemetry = {
       ram: Math.round((usedMem / totalMem) * 100),
       cpu: Math.min(Math.round(cpuLoad * 100), 100),
       timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
-    });
+    };
+
+    io.emit('telemetry', latestTelemetry);
   } catch (e) {
     // Silently fail telemetry
   }
 }, 2500);
+
+// ---------------------------------------------------------
+// API: Telemetry Snapshot (fallback for clients)
+// ---------------------------------------------------------
+app.get('/api/orchestrator/telemetry', (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Surrogate-Control', 'no-store');
+  res.json({ success: true, telemetry: latestTelemetry });
+});
 
 // Health check broadcast every 15s
 setInterval(async () => {
@@ -708,6 +829,258 @@ app.get('/api/orchestrator/history', (req, res) => {
 });
 
 // ---------------------------------------------------------
+// API: Encrypted Secrets Vault
+// ---------------------------------------------------------
+app.get('/api/orchestrator/secrets/:projectName', (req, res) => {
+  const projectName = normalizeProjectName(req.params.projectName);
+  if (!projectName) {
+    return res.status(400).json({ success: false, error: 'Valid project name is required.' });
+  }
+
+  const vault = getVault();
+  const projectVault = vault.projects[projectName] || { updatedAt: null, entries: {} };
+  const preview = {};
+
+  Object.entries(projectVault.entries || {}).forEach(([key, encrypted]) => {
+    try {
+      preview[key] = maskSecret(decryptSecret(encrypted));
+    } catch (e) {
+      preview[key] = '****';
+    }
+  });
+
+  res.json({
+    success: true,
+    projectName: projectName,
+    updatedAt: projectVault.updatedAt,
+    secrets: preview
+  });
+});
+
+app.post('/api/orchestrator/secrets/:projectName', (req, res) => {
+  const projectName = normalizeProjectName(req.params.projectName);
+  const rotate = Boolean(req.body?.rotate);
+  const envMap = req.body?.envMap && typeof req.body.envMap === 'object'
+    ? req.body.envMap
+    : parseEnvText(req.body?.envText);
+
+  if (!projectName) {
+    return res.status(400).json({ success: false, error: 'Valid project name is required.' });
+  }
+
+  if (!envMap || Object.keys(envMap).length === 0) {
+    return res.status(400).json({ success: false, error: 'No secrets provided.' });
+  }
+
+  const registry = getRegistry();
+  if (!registry.projects[projectName]) {
+    return res.status(404).json({ success: false, error: 'Project not found in registry.' });
+  }
+
+  const vault = getVault();
+  const current = rotate
+    ? { updatedAt: null, entries: {} }
+    : (vault.projects[projectName] || { updatedAt: null, entries: {} });
+
+  Object.entries(envMap).forEach(([k, v]) => {
+    if (!k) return;
+    current.entries[k] = encryptSecret(String(v));
+  });
+  current.updatedAt = new Date().toISOString();
+
+  vault.projects[projectName] = current;
+  saveVault(vault);
+
+  return res.json({
+    success: true,
+    message: rotate ? 'Secrets rotated.' : 'Secrets saved.',
+    projectName: projectName,
+    totalSecrets: Object.keys(current.entries).length,
+    updatedAt: current.updatedAt
+  });
+});
+
+app.post('/api/orchestrator/secrets/:projectName/apply', async (req, res) => {
+  const projectName = normalizeProjectName(req.params.projectName);
+  if (!projectName) {
+    return res.status(400).json({ success: false, error: 'Valid project name is required.' });
+  }
+
+  const registry = getRegistry();
+  if (!registry.projects[projectName]) {
+    return res.status(404).json({ success: false, error: 'Project not found in registry.' });
+  }
+
+  const vault = getVault();
+  const projectVault = vault.projects[projectName];
+
+  if (!projectVault || !projectVault.entries || Object.keys(projectVault.entries).length === 0) {
+    return res.status(404).json({ success: false, error: 'No stored secrets for this project.' });
+  }
+
+  const deployPath = path.join(DEPLOY_ROOT, projectName);
+  if (!fs.existsSync(deployPath)) {
+    return res.status(404).json({ success: false, error: 'Deployment path not found.' });
+  }
+
+  try {
+    const envMap = {};
+    Object.entries(projectVault.entries).forEach(([k, encrypted]) => {
+      envMap[k] = decryptSecret(encrypted);
+    });
+
+    fs.writeFileSync(path.join(deployPath, '.env'), buildEnvText(envMap));
+    await execPromise('cd ' + quoteForShell(deployPath) + ' && pm2 restart ' + quoteForShell(projectName) + ' --update-env');
+    await execPromise('pm2 save');
+
+    return res.json({
+      success: true,
+      message: 'Secrets applied and process restarted.',
+      totalSecrets: Object.keys(envMap).length
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to apply secrets.',
+      terminalOutput: error.message
+    });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Backup + Restore
+// ---------------------------------------------------------
+app.get('/api/orchestrator/backups', (req, res) => {
+  try {
+    ensureBackupRoot();
+    const backupIds = fs.readdirSync(BACKUP_ROOT)
+      .filter((name) => fs.statSync(path.join(BACKUP_ROOT, name)).isDirectory())
+      .sort((a, b) => b.localeCompare(a));
+
+    const backups = backupIds.map((backupId) => {
+      const backupDir = path.join(BACKUP_ROOT, backupId);
+      const manifestPath = path.join(backupDir, 'manifest.json');
+      if (fs.existsSync(manifestPath)) {
+        try {
+          return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        } catch {}
+      }
+      return { backupId: backupId, createdAt: null, includeDeployments: false };
+    });
+
+    return res.json({ success: true, backups: backups });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || 'Failed to list backups.' });
+  }
+});
+
+app.post('/api/orchestrator/backups/create', async (req, res) => {
+  const includeDeployments = req.body?.includeDeployments !== false;
+
+  if (activeDeploy || deployQueue.length > 0) {
+    return res.status(409).json({
+      success: false,
+      error: 'Cannot create backup while deployments are running or queued.'
+    });
+  }
+
+  try {
+    ensureBackupRoot();
+    const backupId = 'backup-' + new Date().toISOString().replace(/[:.]/g, '-');
+    const backupDir = path.join(BACKUP_ROOT, backupId);
+    fs.mkdirSync(backupDir, { recursive: true });
+
+    if (fs.existsSync(REGISTRY_PATH)) fs.copyFileSync(REGISTRY_PATH, path.join(backupDir, 'projects.json'));
+    if (fs.existsSync(HISTORY_PATH)) fs.copyFileSync(HISTORY_PATH, path.join(backupDir, 'deploy-history.json'));
+    if (fs.existsSync(VAULT_PATH)) fs.copyFileSync(VAULT_PATH, path.join(backupDir, 'secrets-vault.json'));
+    if (fs.existsSync(CADDYFILE_PATH)) fs.copyFileSync(CADDYFILE_PATH, path.join(backupDir, 'Caddyfile'));
+
+    if (includeDeployments && fs.existsSync(DEPLOY_ROOT)) {
+      await execPromise('cp -a ' + quoteForShell(DEPLOY_ROOT) + ' ' + quoteForShell(path.join(backupDir, 'epic-deployments')));
+    }
+
+    const manifest = {
+      backupId: backupId,
+      createdAt: new Date().toISOString(),
+      includeDeployments: includeDeployments,
+      files: {
+        projects: fs.existsSync(path.join(backupDir, 'projects.json')),
+        history: fs.existsSync(path.join(backupDir, 'deploy-history.json')),
+        vault: fs.existsSync(path.join(backupDir, 'secrets-vault.json')),
+        caddy: fs.existsSync(path.join(backupDir, 'Caddyfile')),
+        deployments: fs.existsSync(path.join(backupDir, 'epic-deployments'))
+      }
+    };
+
+    fs.writeFileSync(path.join(backupDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
+    return res.json({ success: true, backup: manifest });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Backup failed.',
+      terminalOutput: error.message
+    });
+  }
+});
+
+app.post('/api/orchestrator/backups/restore', async (req, res) => {
+  const backupId = String(req.body?.backupId || '').trim();
+  const includeDeployments = req.body?.includeDeployments !== false;
+
+  if (!backupId) {
+    return res.status(400).json({ success: false, error: 'backupId is required.' });
+  }
+
+  if (activeDeploy || deployQueue.length > 0) {
+    return res.status(409).json({
+      success: false,
+      error: 'Cannot restore while deployments are running or queued.'
+    });
+  }
+
+  const backupDir = path.join(BACKUP_ROOT, backupId);
+  if (!fs.existsSync(backupDir)) {
+    return res.status(404).json({ success: false, error: 'Backup not found.' });
+  }
+
+  try {
+    if (fs.existsSync(path.join(backupDir, 'projects.json'))) {
+      fs.copyFileSync(path.join(backupDir, 'projects.json'), REGISTRY_PATH);
+    }
+    if (fs.existsSync(path.join(backupDir, 'deploy-history.json'))) {
+      fs.copyFileSync(path.join(backupDir, 'deploy-history.json'), HISTORY_PATH);
+    }
+    if (fs.existsSync(path.join(backupDir, 'secrets-vault.json'))) {
+      fs.copyFileSync(path.join(backupDir, 'secrets-vault.json'), VAULT_PATH);
+    }
+    if (fs.existsSync(path.join(backupDir, 'Caddyfile'))) {
+      fs.copyFileSync(path.join(backupDir, 'Caddyfile'), CADDYFILE_PATH);
+    }
+
+    if (includeDeployments && fs.existsSync(path.join(backupDir, 'epic-deployments'))) {
+      await execPromise('rm -rf ' + quoteForShell(DEPLOY_ROOT));
+      await execPromise('cp -a ' + quoteForShell(path.join(backupDir, 'epic-deployments')) + ' ' + quoteForShell(DEPLOY_ROOT));
+    }
+
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await execPromise('pm2 save');
+
+    return res.json({
+      success: true,
+      message: 'Restore completed from ' + backupId + '.',
+      includeDeployments: includeDeployments
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Restore failed.',
+      terminalOutput: error.message
+    });
+  }
+});
+
+// ---------------------------------------------------------
 // API: Alternative Backend Deploy (Home Directory)
 // ---------------------------------------------------------
 app.post('/api/deploy-backend', async (req, res) => {
@@ -874,11 +1247,187 @@ app.post('/api/orchestrator/cleanup', async (req, res) => {
 });
 
 // ---------------------------------------------------------
+// PHASE 3: AUTO-HEAL WATCHDOG
+// ---------------------------------------------------------
+// Track consecutive HTTP failures per project: { [name]: count }
+const watchdogFailCounts = {};
+// Last known per-project watchdog events: { [name]: { status, checkedAt, healedAt, lastError } }
+const watchdogState = {};
+
+function getWatchdogSnapshot() {
+  return Object.keys(watchdogState).length ? watchdogState : {};
+}
+
+function probeProjectUrl(url) {
+  return new Promise((resolve) => {
+    const proto = url.startsWith('https') ? require('https') : http;
+    const req = proto.get(url, (res) => {
+      resolve(res.statusCode >= 200 && res.statusCode < 500);
+      res.resume();
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(5000, () => { req.destroy(); resolve(false); });
+  });
+}
+
+// Watchdog interval: check every 60 seconds
+setInterval(async () => {
+  try {
+    const registry = getRegistry();
+    const projectNames = Object.keys(registry.projects);
+
+    for (const name of projectNames) {
+      const project = registry.projects[name];
+      const url = project.domain
+        ? 'https://' + project.domain + '/'
+        : 'https://' + name + '.epicglobal.app/';
+
+      const alive = await probeProjectUrl(url);
+      const now = new Date().toISOString();
+
+      if (alive) {
+        watchdogFailCounts[name] = 0;
+        watchdogState[name] = Object.assign({}, watchdogState[name] || {}, {
+          status: 'ok',
+          url: url,
+          checkedAt: now
+        });
+      } else {
+        watchdogFailCounts[name] = (watchdogFailCounts[name] || 0) + 1;
+        const failCount = watchdogFailCounts[name];
+        watchdogState[name] = Object.assign({}, watchdogState[name] || {}, {
+          status: 'failing',
+          url: url,
+          checkedAt: now,
+          consecutiveFails: failCount
+        });
+
+        if (failCount >= 2) {
+          // Attempt PM2 restart
+          try {
+            await execPromise('pm2 restart ' + quoteForShell(name) + ' --update-env');
+            await execPromise('pm2 save');
+
+            watchdogState[name] = Object.assign({}, watchdogState[name], {
+              status: 'healed',
+              healedAt: now,
+              consecutiveFails: 0
+            });
+            watchdogFailCounts[name] = 0;
+
+            const msg = 'Auto-heal: restarted ' + name + ' after ' + failCount + ' consecutive failures.';
+            console.log('[watchdog]', msg);
+            await sendAlert('watchdog', name, msg, 'warning');
+            io.emit('watchdog_event', { name: name, status: 'healed', message: msg, timestamp: now });
+          } catch (restartError) {
+            const errMsg = 'Auto-heal FAILED for ' + name + ': ' + restartError.message;
+            console.error('[watchdog]', errMsg);
+            watchdogState[name] = Object.assign({}, watchdogState[name], {
+              status: 'down',
+              lastError: errMsg
+            });
+            await sendAlert('watchdog', name, errMsg, 'error');
+            io.emit('watchdog_event', { name: name, status: 'down', message: errMsg, timestamp: now });
+          }
+        }
+      }
+    }
+
+    io.emit('watchdog_state', getWatchdogSnapshot());
+  } catch (e) {
+    // Watchdog cycle error — silently continue
+    console.error('[watchdog] cycle error:', e.message);
+  }
+}, 60000);
+
+// ---------------------------------------------------------
+// PHASE 4: ALERT WEBHOOK (TELEGRAM / DISCORD)
+// ---------------------------------------------------------
+async function sendAlert(type, projectName, message, level) {
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChat = process.env.TELEGRAM_CHAT_ID;
+  const discordWebhook = process.env.DISCORD_WEBHOOK_URL;
+
+  const emoji = level === 'error' ? '\u274C' : level === 'warning' ? '\u26A0\uFE0F' : '\u2705';
+  const text = emoji + ' [EpicGlobal / ' + type + '] ' + projectName + ': ' + message;
+
+  const errors = [];
+
+  if (telegramToken && telegramChat) {
+    try {
+      await fetch(
+        'https://api.telegram.org/bot' + telegramToken + '/sendMessage',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: telegramChat, text: text, parse_mode: 'HTML' })
+        }
+      );
+    } catch (e) {
+      errors.push('telegram: ' + e.message);
+    }
+  }
+
+  if (discordWebhook) {
+    try {
+      await fetch(discordWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: text })
+      });
+    } catch (e) {
+      errors.push('discord: ' + e.message);
+    }
+  }
+
+  return errors;
+}
+
+// ---------------------------------------------------------
+// API: Watchdog Status
+// ---------------------------------------------------------
+app.get('/api/orchestrator/watchdog', (req, res) => {
+  res.json({ success: true, watchdog: getWatchdogSnapshot(), failCounts: watchdogFailCounts });
+});
+
+// ---------------------------------------------------------
+// API: Alert Settings
+// ---------------------------------------------------------
+app.get('/api/orchestrator/alerts/config', (req, res) => {
+  const hasTelegram = !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID);
+  const hasDiscord = !!process.env.DISCORD_WEBHOOK_URL;
+  res.json({
+    success: true,
+    config: {
+      telegram: hasTelegram,
+      discord: hasDiscord,
+      telegramChatId: hasTelegram ? process.env.TELEGRAM_CHAT_ID : null
+    }
+  });
+});
+
+app.post('/api/orchestrator/alerts/test', async (req, res) => {
+  const type = String(req.body?.type || 'manual');
+  const errors = await sendAlert(type, 'test', 'EpicGlobal alert test fired successfully.', 'info');
+
+  if (errors.length > 0) {
+    return res.status(500).json({ success: false, error: errors.join('; ') });
+  }
+  res.json({ success: true, message: 'Test alert sent.' });
+});
+
+// ---------------------------------------------------------
 // SOCKET.IO: Real-time Telemetry Heartbeat
 // ---------------------------------------------------------
 io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
+  socket.emit('telemetry', latestTelemetry);
   socket.emit('deploy_queue', getQueueSnapshot());
+  socket.emit('watchdog_state', getWatchdogSnapshot());
+
+  socket.on('telemetry_request', () => {
+    socket.emit('telemetry', latestTelemetry);
+  });
 
   socket.on('disconnect', () => {
     console.log('Socket disconnected:', socket.id);
