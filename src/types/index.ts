@@ -10,10 +10,8 @@ export type ProjectHealth = {
 
 export type Project = {
   port: number;
-  repoUrl: string | null;
+  repoUrl: string;
   domain?: string;
-  webhookSecret?: string;
-  deployType?: 'git' | 'static';
   health: ProjectHealth;
 };
 

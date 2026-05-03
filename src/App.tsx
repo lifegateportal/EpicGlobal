@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, Terminal } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { Navbar } from './components/Navbar';
 import { OverviewTab } from './components/OverviewTab';
@@ -146,8 +146,14 @@ export default function App() {
             <h1 className="text-2xl sm:text-3xl font-semibold text-zinc-100 tracking-tight mb-1.5">Production Deployment</h1>
             <p className="text-sm text-zinc-500">Your application is live and receiving traffic.</p>
           </div>
-          <div className="flex gap-3">
-            <button onClick={() => setIsTerminalOpen(true)} className="h-9 px-4 bg-zinc-900 border border-zinc-800 text-zinc-300 text-sm font-medium rounded-md hover:bg-zinc-800 transition-colors whitespace-nowrap">Command & Logs</button>
+          <div className="flex gap-3 shrink-0">
+            <button
+              onClick={() => setIsTerminalOpen(true)}
+              className="h-9 w-9 sm:w-auto sm:px-4 flex items-center justify-center gap-2 bg-zinc-900 border border-zinc-800 text-zinc-300 text-sm font-medium rounded-md hover:bg-zinc-800 transition-colors"
+            >
+              <Terminal size={15} />
+              <span className="hidden sm:inline whitespace-nowrap">Command & Logs</span>
+            </button>
           </div>
         </div>
 

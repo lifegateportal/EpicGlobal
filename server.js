@@ -260,9 +260,18 @@ function buildCaddyConfig(registry) {
     if (data.domain) {
       hosts.push(data.domain);
     }
-    hosts.forEach((host) => {
-      config += '\n' + host + ' {\n  reverse_proxy localhost:' + data.port + '\n}\n';
-    });
+
+    if (data.deployType === 'static') {
+      // Serve static files directly via Caddy (no PM2 process needed)
+      const serveDir = data.staticDir || path.join(DEPLOY_ROOT, name);
+      hosts.forEach((host) => {
+        config += '\n' + host + ' {\n  root * ' + serveDir + '\n  file_server\n  try_files {path} /index.html\n}\n';
+      });
+    } else {
+      hosts.forEach((host) => {
+        config += '\n' + host + ' {\n  reverse_proxy localhost:' + data.port + '\n}\n';
+      });
+    }
   });
   
   return config;
@@ -436,8 +445,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
 }
 
 async function executeOrchestratorDeploy(payload) {
-  const repoUrl = payload.repoUrl;           // may contain embedded token — used only for git clone
-  const rawRepoUrl = payload.rawRepoUrl || payload.repoUrl; // clean URL stored in registry
+  const repoUrl = payload.repoUrl;
   const projectName = payload.projectName;
   const domain = payload.domain;
 
@@ -449,14 +457,10 @@ async function executeOrchestratorDeploy(payload) {
     registry.nextPort += 1;
   }
 
-  // Generate a per-project webhook secret on first deploy, preserve on re-deploys.
-  const webhookSecret = existingProject?.webhookSecret || crypto.randomBytes(24).toString('hex');
-
   registry.projects[projectName] = {
     port: port,
-    repoUrl: rawRepoUrl,          // never store token-embedded URL
-    domain: domain || existingProject?.domain || undefined,
-    webhookSecret
+    repoUrl: repoUrl,
+    domain: domain || existingProject?.domain || undefined
   };
   saveRegistry(registry);
 
@@ -550,7 +554,6 @@ async function executeOrchestratorDeploy(payload) {
       success: true,
       port: port,
       url: url,
-      webhookSecret: webhookSecret,
       terminalOutput: output || 'Deployment finished',
       log: output || 'Deployment finished'
     };
@@ -708,158 +711,12 @@ app.post('/api/deploy', async (req, res) => {
 });
 
 // ---------------------------------------------------------
-// MULTER: In-memory upload (max 100 MB total)
-// ---------------------------------------------------------
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 }
-});
-
-// ---------------------------------------------------------
-// API: Static File Upload Deploy
-// POST /api/orchestrator/upload  (multipart/form-data)
-// Fields: projectName, domain (opt), files[] or a single .zip
-// ---------------------------------------------------------
-app.post('/api/orchestrator/upload', upload.array('files'), async (req, res) => {
-  const projectName = normalizeProjectName(req.body?.projectName);
-  const domain = normalizeDomain(req.body?.domain);
-
-  if (!projectName) {
-    return res.status(400).json({ success: false, error: 'A valid project name is required.' });
-  }
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ success: false, error: 'No files received.' });
-  }
-
-  const deployPath = path.join(DEPLOY_ROOT, projectName);
-
-  try {
-    // Clear existing directory and recreate
-    await execPromise('rm -rf ' + quoteForShell(deployPath));
-    fs.mkdirSync(deployPath, { recursive: true });
-
-    const isSingleZip = req.files.length === 1 && req.files[0].originalname.endsWith('.zip');
-
-    if (isSingleZip) {
-      // Extract zip preserving internal folder structure
-      await new Promise((resolve, reject) => {
-        const zipBuffer = req.files[0].buffer;
-        const Readable = require('stream').Readable;
-        const readable = new Readable();
-        readable.push(zipBuffer);
-        readable.push(null);
-        readable
-          .pipe(unzipper.Extract({ path: deployPath }))
-          .on('close', resolve)
-          .on('error', reject);
-      });
-    } else {
-      // Save each file at its relative path (preserves folder structure from webkitdirectory)
-      for (const file of req.files) {
-        // relativePath is sent by the client as a form field alongside each file
-        // (see UI: we append field "relativePaths[]" per file)
-        const relativePathIndex = req.files.indexOf(file);
-        const relativePaths = Array.isArray(req.body?.relativePaths)
-          ? req.body.relativePaths
-          : [req.body?.relativePaths || file.originalname];
-        const relPath = relativePaths[relativePathIndex] || file.originalname;
-
-        // Security: prevent path traversal
-        const safePath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
-        const fullPath = path.join(deployPath, safePath);
-
-        // Ensure parent directory exists
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-        fs.writeFileSync(fullPath, file.buffer);
-      }
-    }
-
-    // Stop any existing PM2 process for this project
-    try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
-
-    // Serve the uploaded directory statically
-    const registry = getRegistry();
-    const existingProject = registry.projects[projectName];
-    const port = existingProject ? existingProject.port : registry.nextPort;
-    if (!existingProject) registry.nextPort += 1;
-
-    const webhookSecret = existingProject?.webhookSecret || crypto.randomBytes(24).toString('hex');
-
-    await execPromise(
-      'pm2 start ' + quoteForShell('npx serve -s . -l ' + port) +
-      ' --name ' + quoteForShell(projectName) +
-      ' --cwd ' + quoteForShell(deployPath) +
-      ' && pm2 save'
-    );
-
-    // Health probe — up to 15 s
-    const healthy = await probeHealth(port, 5, 3000);
-    if (!healthy) {
-      try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
-      await execPromise('rm -rf ' + quoteForShell(deployPath));
-      return res.status(502).json({
-        success: false,
-        error: 'Files saved but serve process did not respond within 15 s. Check that your upload contains an index.html at the root.'
-      });
-    }
-
-    // Ensure an index.html exists at root (warn but don't fail)
-    const hasIndex = fs.existsSync(path.join(deployPath, 'index.html'));
-
-    registry.projects[projectName] = {
-      port,
-      repoUrl: null,
-      domain: domain || existingProject?.domain || undefined,
-      webhookSecret,
-      deployType: 'static'
-    };
-    saveRegistry(registry);
-
-    const finalRegistry = getRegistry();
-    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(finalRegistry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
-
-    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
-    appendHistory(projectName, 'success', { port, url, repoUrl: 'static-upload', strategy: 'static' });
-    sendAlert('deploy', projectName, 'Static upload deployed. Live at ' + url, 'success').catch(() => {});
-
-    return res.json({
-      success: true,
-      port,
-      url,
-      webhookSecret,
-      hasIndex,
-      log: 'Static upload complete. ' + req.files.length + ' file(s) written to ' + deployPath + (hasIndex ? '' : '\n⚠️  No index.html found at root — the site may not load correctly.')
-    });
-  } catch (err) {
-    const msg = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n').trim();
-    appendHistory(projectName, 'failed', { error: msg, repoUrl: 'static-upload', strategy: 'static' });
-    return res.status(500).json({ success: false, error: msg || 'Upload deploy failed.' });
-  }
-});
-
-// ---------------------------------------------------------
 // API: Backend Orchestrator (PM2) - Sync-Locked Builds
 // ---------------------------------------------------------
 app.post('/api/orchestrator/deploy', async (req, res) => {
-  const rawRepoUrl = String(req.body?.repoUrl || '').trim();
-  const accessToken = String(req.body?.accessToken || '').trim();
+  const repoUrl = String(req.body?.repoUrl || '').trim();
   const projectName = normalizeProjectName(req.body?.projectName);
   const domain = normalizeDomain(req.body?.domain);
-
-  // Embed access token into URL for private repos (never stored in registry).
-  // Supports GitHub, GitLab, Gitea, Bitbucket, and any HTTP-auth-capable git host.
-  let repoUrl = rawRepoUrl;
-  if (accessToken) {
-    try {
-      const parsed = new URL(rawRepoUrl);
-      parsed.username = 'oauth2';        // works for GitLab; GitHub/Gitea ignore username
-      parsed.password = accessToken;
-      repoUrl = parsed.toString();
-    } catch {
-      return res.status(400).json({ success: false, error: 'Invalid repository URL.' });
-    }
-  }
 
   if (!projectName) {
     return res.status(400).json({
@@ -875,7 +732,7 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
     });
   }
 
-  if (!validateUrl(rawRepoUrl)) {
+  if (!validateUrl(repoUrl)) {
     return res.status(400).json({
       success: false,
       error: 'The repository URL must be a valid HTTP(S) URL.'
@@ -890,8 +747,7 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
   }
 
   try {
-    // Pass token-embedded URL for cloning, but raw URL for registry storage (no token at rest).
-    const result = await enqueueDeploy({ projectName, repoUrl, rawRepoUrl, domain });
+    const result = await enqueueDeploy({ projectName, repoUrl, domain });
     return res.json(result);
   } catch (error) {
     const statusCode = error?.statusCode || 500;
@@ -909,57 +765,6 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
 // ---------------------------------------------------------
 app.get('/api/orchestrator/queue', (req, res) => {
   res.json({ success: true, queue: getQueueSnapshot() });
-});
-
-// ---------------------------------------------------------
-// API: Push Webhook — any git host triggers a redeploy
-// POST /api/orchestrator/webhook/:projectName?secret=<token>
-// ---------------------------------------------------------
-app.post('/api/orchestrator/webhook/:projectName', async (req, res) => {
-  const projectName = normalizeProjectName(req.params.projectName);
-  const secret = String(req.query.secret || req.headers['x-webhook-secret'] || '').trim();
-
-  const registry = getRegistry();
-  const project = registry.projects[projectName];
-
-  if (!project) {
-    return res.status(404).json({ success: false, error: 'Project not found.' });
-  }
-
-  if (!project.webhookSecret || !crypto.timingSafeEqual(
-    Buffer.from(secret),
-    Buffer.from(project.webhookSecret)
-  )) {
-    return res.status(401).json({ success: false, error: 'Invalid webhook secret.' });
-  }
-
-  if (isProjectBusy(projectName)) {
-    return res.status(409).json({ success: false, error: 'Deployment already queued or running.' });
-  }
-
-  // Fire-and-forget — respond immediately so the git host doesn't time out.
-  res.json({ success: true, message: 'Redeploy queued for ' + projectName });
-
-  enqueueDeploy({ projectName, repoUrl: project.repoUrl, rawRepoUrl: project.repoUrl, domain: project.domain })
-    .then(() => console.log('[webhook] ' + projectName + ' redeployed via webhook.'))
-    .catch((err) => console.error('[webhook] ' + projectName + ' redeploy failed:', err?.body?.error || err?.message));
-});
-
-// ---------------------------------------------------------
-// API: Webhook secret fetch (so UI can display the hook URL)
-// GET /api/orchestrator/webhook/:projectName/info
-// ---------------------------------------------------------
-app.get('/api/orchestrator/webhook/:projectName/info', (req, res) => {
-  const projectName = normalizeProjectName(req.params.projectName);
-  const registry = getRegistry();
-  const project = registry.projects[projectName];
-
-  if (!project) {
-    return res.status(404).json({ success: false, error: 'Project not found.' });
-  }
-
-  const hookUrl = 'https://api.epicglobal.app/api/orchestrator/webhook/' + projectName + '?secret=' + (project.webhookSecret || '');
-  res.json({ success: true, webhookUrl: hookUrl, projectName });
 });
 
 // ---------------------------------------------------------
@@ -1066,6 +871,84 @@ app.post('/api/orchestrator/delete', async (req, res) => {
     res.json({ success: true, terminalOutput: projectName + ' has been deleted.' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message, terminalOutput: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Static File Upload Deploy
+// ---------------------------------------------------------
+const uploadMiddleware = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req, res) => {
+  try {
+    const projectName = normalizeProjectName(req.body?.projectName);
+    const domain = normalizeDomain(req.body?.domain || '');
+
+    if (!projectName) {
+      return res.status(400).json({ success: false, error: 'projectName is required.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded.' });
+    }
+
+    const projectDir = path.join(DEPLOY_ROOT, projectName);
+
+    // Clear previous deployment
+    if (fs.existsSync(projectDir)) {
+      await execPromise('rm -rf ' + quoteForShell(projectDir));
+    }
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const filename = req.file.originalname.toLowerCase();
+
+    if (filename.endsWith('.zip')) {
+      // Extract zip
+      await new Promise((resolve, reject) => {
+        const { Readable } = require('stream');
+        Readable.from(req.file.buffer)
+          .pipe(unzipper.Extract({ path: projectDir }))
+          .on('close', resolve)
+          .on('error', reject);
+      });
+    } else {
+      // Single file (html, css, js, etc.)
+      fs.writeFileSync(path.join(projectDir, req.file.originalname), req.file.buffer);
+    }
+
+    // If zip extracted a single root folder, serve from inside it
+    const entries = fs.readdirSync(projectDir);
+    let serveDir = projectDir;
+    if (entries.length === 1) {
+      const nested = path.join(projectDir, entries[0]);
+      if (fs.statSync(nested).isDirectory()) {
+        serveDir = nested;
+      }
+    }
+
+    // Register as static project (no port, no PM2 process)
+    const registry = getRegistry();
+    registry.projects[projectName] = {
+      name: projectName,
+      repoUrl: null,
+      deployType: 'static',
+      domain: domain || null,
+      port: null,
+      staticDir: serveDir,
+      health: { status: 'online', memory: 0, cpu: 0, restarts: 0 },
+      deployedAt: new Date().toISOString()
+    };
+    saveRegistry(registry);
+
+    // Rebuild Caddy config to serve static files directly
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+
+    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
+    appendHistory(projectName, 'success', { url, strategy: 'static-upload' });
+
+    res.json({ success: true, url, projectName });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
