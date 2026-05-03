@@ -8,6 +8,8 @@ const util = require('util');
 const http = require('http');
 const crypto = require('crypto');
 const { Server } = require('socket.io');
+const multer = require('multer');
+const unzipper = require('unzipper');
 
 const execPromise = util.promisify(exec);
 
@@ -702,6 +704,137 @@ app.post('/api/deploy', async (req, res) => {
       error: error.message || 'Failed to provision Cloudflare deployment.',
       terminalOutput: error.message
     });
+  }
+});
+
+// ---------------------------------------------------------
+// MULTER: In-memory upload (max 100 MB total)
+// ---------------------------------------------------------
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }
+});
+
+// ---------------------------------------------------------
+// API: Static File Upload Deploy
+// POST /api/orchestrator/upload  (multipart/form-data)
+// Fields: projectName, domain (opt), files[] or a single .zip
+// ---------------------------------------------------------
+app.post('/api/orchestrator/upload', upload.array('files'), async (req, res) => {
+  const projectName = normalizeProjectName(req.body?.projectName);
+  const domain = normalizeDomain(req.body?.domain);
+
+  if (!projectName) {
+    return res.status(400).json({ success: false, error: 'A valid project name is required.' });
+  }
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ success: false, error: 'No files received.' });
+  }
+
+  const deployPath = path.join(DEPLOY_ROOT, projectName);
+
+  try {
+    // Clear existing directory and recreate
+    await execPromise('rm -rf ' + quoteForShell(deployPath));
+    fs.mkdirSync(deployPath, { recursive: true });
+
+    const isSingleZip = req.files.length === 1 && req.files[0].originalname.endsWith('.zip');
+
+    if (isSingleZip) {
+      // Extract zip preserving internal folder structure
+      await new Promise((resolve, reject) => {
+        const zipBuffer = req.files[0].buffer;
+        const Readable = require('stream').Readable;
+        const readable = new Readable();
+        readable.push(zipBuffer);
+        readable.push(null);
+        readable
+          .pipe(unzipper.Extract({ path: deployPath }))
+          .on('close', resolve)
+          .on('error', reject);
+      });
+    } else {
+      // Save each file at its relative path (preserves folder structure from webkitdirectory)
+      for (const file of req.files) {
+        // relativePath is sent by the client as a form field alongside each file
+        // (see UI: we append field "relativePaths[]" per file)
+        const relativePathIndex = req.files.indexOf(file);
+        const relativePaths = Array.isArray(req.body?.relativePaths)
+          ? req.body.relativePaths
+          : [req.body?.relativePaths || file.originalname];
+        const relPath = relativePaths[relativePathIndex] || file.originalname;
+
+        // Security: prevent path traversal
+        const safePath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
+        const fullPath = path.join(deployPath, safePath);
+
+        // Ensure parent directory exists
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, file.buffer);
+      }
+    }
+
+    // Stop any existing PM2 process for this project
+    try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
+
+    // Serve the uploaded directory statically
+    const registry = getRegistry();
+    const existingProject = registry.projects[projectName];
+    const port = existingProject ? existingProject.port : registry.nextPort;
+    if (!existingProject) registry.nextPort += 1;
+
+    const webhookSecret = existingProject?.webhookSecret || crypto.randomBytes(24).toString('hex');
+
+    await execPromise(
+      'pm2 start ' + quoteForShell('npx serve -s . -l ' + port) +
+      ' --name ' + quoteForShell(projectName) +
+      ' --cwd ' + quoteForShell(deployPath) +
+      ' && pm2 save'
+    );
+
+    // Health probe — up to 15 s
+    const healthy = await probeHealth(port, 5, 3000);
+    if (!healthy) {
+      try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
+      await execPromise('rm -rf ' + quoteForShell(deployPath));
+      return res.status(502).json({
+        success: false,
+        error: 'Files saved but serve process did not respond within 15 s. Check that your upload contains an index.html at the root.'
+      });
+    }
+
+    // Ensure an index.html exists at root (warn but don't fail)
+    const hasIndex = fs.existsSync(path.join(deployPath, 'index.html'));
+
+    registry.projects[projectName] = {
+      port,
+      repoUrl: null,
+      domain: domain || existingProject?.domain || undefined,
+      webhookSecret,
+      deployType: 'static'
+    };
+    saveRegistry(registry);
+
+    const finalRegistry = getRegistry();
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(finalRegistry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+
+    const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
+    appendHistory(projectName, 'success', { port, url, repoUrl: 'static-upload', strategy: 'static' });
+    sendAlert('deploy', projectName, 'Static upload deployed. Live at ' + url, 'success').catch(() => {});
+
+    return res.json({
+      success: true,
+      port,
+      url,
+      webhookSecret,
+      hasIndex,
+      log: 'Static upload complete. ' + req.files.length + ' file(s) written to ' + deployPath + (hasIndex ? '' : '\n⚠️  No index.html found at root — the site may not load correctly.')
+    });
+  } catch (err) {
+    const msg = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n').trim();
+    appendHistory(projectName, 'failed', { error: msg, repoUrl: 'static-upload', strategy: 'static' });
+    return res.status(500).json({ success: false, error: msg || 'Upload deploy failed.' });
   }
 });
 

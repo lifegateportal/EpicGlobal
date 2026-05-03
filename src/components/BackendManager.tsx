@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
-import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Copy, Link } from 'lucide-react';
+import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Copy, Link, FolderOpen, FileUp, X as XIcon } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
 import { BASE_URL, API } from '../api/client';
@@ -12,8 +12,24 @@ function StatusBadge({ status }: { status: string }) {
   return <span className="flex items-center gap-1.5 text-zinc-500 text-xs font-medium"><AlertCircle size={12} /> Stopped</span>;
 }
 
+type UploadedFile = { file: File; relativePath: string };
+
 export default function ProjectOrchestrator() {
+  // Deploy mode: 'git' or 'upload'
+  const [deployMode, setDeployMode] = useState<'git' | 'upload'>('git');
+
+  // Git deploy form
   const [form, setForm] = useState({ projectName: '', repoUrl: '', domain: '', accessToken: '' });
+
+  // Static upload state
+  const [uploadForm, setUploadForm] = useState({ projectName: '', domain: '' });
+  const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([]);
+  const [uploadDragging, setUploadDragging] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState({ loading: false, logs: '', error: '' });
+  const [uploadedUrl, setUploadedUrl] = useState('');
+  const [uploadedWebhookUrl, setUploadedWebhookUrl] = useState('');
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const uploadFolderRef = useRef<HTMLInputElement>(null);
   const [deployStatus, setDeployStatus] = useState({ loading: false, logs: '', error: '' });
   const [deployedUrl, setDeployedUrl] = useState('');
   const [deployedWebhookUrl, setDeployedWebhookUrl] = useState('');
@@ -298,6 +314,67 @@ export default function ProjectOrchestrator() {
     };
   }, []);
 
+  // ── File collection helpers ────────────────────────────────────────────────
+
+  const addFiles = (fileList: FileList | null) => {
+    if (!fileList) return;
+    const next: UploadedFile[] = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      // webkitRelativePath is set when user picks a folder; fallback to just name
+      const rel = (f as any).webkitRelativePath || f.name;
+      next.push({ file: f, relativePath: rel });
+    }
+    setUploadFiles(prev => {
+      const existing = new Set(prev.map(u => u.relativePath));
+      return [...prev, ...next.filter(u => !existing.has(u.relativePath))];
+    });
+  };
+
+  const handleUploadDeploy = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (uploadFiles.length === 0) { toast.error('Add at least one file.'); return; }
+    const pName = uploadForm.projectName.trim();
+    if (!pName) { toast.error('Enter a project name.'); return; }
+
+    setUploadStatus({ loading: true, logs: 'Uploading files…', error: '' });
+    setUploadedUrl('');
+    setUploadedWebhookUrl('');
+
+    try {
+      const fd = new FormData();
+      fd.append('projectName', pName);
+      if (uploadForm.domain.trim()) fd.append('domain', uploadForm.domain.trim());
+      for (const { file, relativePath } of uploadFiles) {
+        fd.append('files', file, file.name);
+        fd.append('relativePaths', relativePath);
+      }
+
+      const res = await fetch(API + '/api/orchestrator/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+
+      if (data.success) {
+        toast.success(pName + ' deployed successfully.');
+        setUploadStatus({ loading: false, logs: data.log || 'Upload complete.', error: '' });
+        setUploadedUrl(data.url || '');
+        if (data.webhookSecret) {
+          const normalized = pName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+          setUploadedWebhookUrl('https://api.epicglobal.app/api/orchestrator/webhook/' + normalized + '?secret=' + data.webhookSecret);
+        }
+        setUploadFiles([]);
+        setUploadForm({ projectName: '', domain: '' });
+        fetchStatus();
+        fetchHistory();
+      } else {
+        setUploadStatus({ loading: false, logs: '', error: data.error || 'Upload failed.' });
+        toast.error(data.error || 'Upload failed.');
+      }
+    } catch {
+      setUploadStatus({ loading: false, logs: '', error: 'Connection failed.' });
+      toast.error('Could not reach API.');
+    }
+  };
+
   const handleDeploy = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setDeployStatus({ loading: true, logs: 'Initiating remote orchestration...', error: '' });
@@ -410,59 +487,155 @@ export default function ProjectOrchestrator() {
         <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center gap-2">
           <Plus size={16} className="text-zinc-400" />
           <h2 className="text-sm font-semibold text-zinc-100">Deploy New Project</h2>
-          <span className="ml-auto text-xs text-blue-400 bg-blue-950/50 border border-blue-900/50 rounded px-2 py-0.5">Blue-green for existing projects</span>
+          {/* Mode toggle */}
+          <div className="ml-auto flex items-center bg-black border border-zinc-800 rounded-lg p-0.5 text-xs font-semibold">
+            <button
+              onClick={() => setDeployMode('git')}
+              className={'px-3 py-1.5 rounded-md transition-colors ' + (deployMode === 'git' ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300')}
+            >
+              Git Repo
+            </button>
+            <button
+              onClick={() => setDeployMode('upload')}
+              className={'px-3 py-1.5 rounded-md transition-colors ' + (deployMode === 'upload' ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300')}
+            >
+              Static Upload
+            </button>
+          </div>
+          {deployMode === 'git' && (
+            <span className="text-xs text-blue-400 bg-blue-950/50 border border-blue-900/50 rounded px-2 py-0.5">Blue-green for existing projects</span>
+          )}
         </div>
         <div className="p-6">
-          <form onSubmit={handleDeploy} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Project Name</label>
-                <input type="text" placeholder="my-app" required
-                  className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
-                  value={form.projectName} onChange={(e) => setForm({ ...form, projectName: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Git Repo URL</label>
-                <input type="url" placeholder="https://github.com / gitlab.com / gitea / …" required
-                  className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
-                  value={form.repoUrl} onChange={(e) => setForm({ ...form, repoUrl: e.target.value })} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Custom Domain <span className="text-zinc-600 normal-case">(optional)</span></label>
-                <input type="text" placeholder="mysite.com"
-                  className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
-                  value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">
-                Access Token <span className="text-zinc-600 normal-case">(optional — for private repos)</span>
-              </label>
-              <input type="password" placeholder="GitHub PAT / GitLab token / Bitbucket app password / Gitea token"
-                className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
-                value={form.accessToken} onChange={(e) => setForm({ ...form, accessToken: e.target.value })} />
-              <p className="text-xs text-zinc-600">Token is embedded into the clone URL and never stored or logged.</p>
-            </div>
-            <button type="submit" disabled={deployStatus.loading}
-              className={'h-10 px-6 rounded-md text-sm font-semibold transition-colors ' + (deployStatus.loading ? 'bg-zinc-800 text-zinc-500 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-500 text-white')}>
-              {deployStatus.loading ? 'Deploying...' : 'Launch Project'}
-            </button>
-          </form>
 
-          {(deployStatus.logs || deployStatus.error) && (
+          {/* ── GIT DEPLOY ── */}
+          {deployMode === 'git' && (
+            <form onSubmit={handleDeploy} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Project Name</label>
+                  <input type="text" placeholder="my-app" required
+                    className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                    value={form.projectName} onChange={(e) => setForm({ ...form, projectName: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Git Repo URL</label>
+                  <input type="url" placeholder="https://github.com / gitlab.com / gitea / …" required
+                    className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                    value={form.repoUrl} onChange={(e) => setForm({ ...form, repoUrl: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Custom Domain <span className="text-zinc-600 normal-case">(optional)</span></label>
+                  <input type="text" placeholder="mysite.com"
+                    className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                    value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">
+                  Access Token <span className="text-zinc-600 normal-case">(optional — for private repos)</span>
+                </label>
+                <input type="password" placeholder="GitHub PAT / GitLab token / Bitbucket app password / Gitea token"
+                  className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                  value={form.accessToken} onChange={(e) => setForm({ ...form, accessToken: e.target.value })} />
+                <p className="text-xs text-zinc-600">Token is embedded into the clone URL and never stored or logged.</p>
+              </div>
+              <button type="submit" disabled={deployStatus.loading}
+                className={'h-10 px-6 rounded-md text-sm font-semibold transition-colors ' + (deployStatus.loading ? 'bg-zinc-800 text-zinc-500 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-500 text-white')}>
+                {deployStatus.loading ? 'Deploying...' : 'Launch Project'}
+              </button>
+            </form>
+          )}
+
+          {/* ── STATIC UPLOAD ── */}
+          {deployMode === 'upload' && (
+            <form onSubmit={handleUploadDeploy} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Project Name</label>
+                  <input type="text" placeholder="my-site" required
+                    className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                    value={uploadForm.projectName} onChange={(e) => setUploadForm({ ...uploadForm, projectName: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Custom Domain <span className="text-zinc-600 normal-case">(optional)</span></label>
+                  <input type="text" placeholder="mysite.com"
+                    className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                    value={uploadForm.domain} onChange={(e) => setUploadForm({ ...uploadForm, domain: e.target.value })} />
+                </div>
+              </div>
+
+              {/* Drag-and-drop zone */}
+              <div
+                onDragOver={(e) => { e.preventDefault(); setUploadDragging(true); }}
+                onDragLeave={() => setUploadDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setUploadDragging(false); addFiles(e.dataTransfer.files); }}
+                className={'border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ' + (uploadDragging ? 'border-indigo-500 bg-indigo-950/20' : 'border-zinc-800 hover:border-zinc-600')}
+                onClick={() => uploadInputRef.current?.click()}
+              >
+                <FileUp size={28} className="mx-auto mb-3 text-zinc-600" />
+                <p className="text-sm text-zinc-400 font-medium">Drop files or a <span className="text-indigo-400">.zip</span> here</p>
+                <p className="text-xs text-zinc-600 mt-1">or click to browse individual files</p>
+                <div className="flex items-center justify-center gap-3 mt-4">
+                  <button type="button"
+                    onClick={(e) => { e.stopPropagation(); uploadInputRef.current?.click(); }}
+                    className="h-8 px-3 rounded-md text-xs font-semibold border border-zinc-700 text-zinc-300 hover:bg-zinc-900">
+                    <Upload size={12} className="inline mr-1" /> Files
+                  </button>
+                  <button type="button"
+                    onClick={(e) => { e.stopPropagation(); uploadFolderRef.current?.click(); }}
+                    className="h-8 px-3 rounded-md text-xs font-semibold border border-zinc-700 text-zinc-300 hover:bg-zinc-900">
+                    <FolderOpen size={12} className="inline mr-1" /> Folder
+                  </button>
+                </div>
+                {/* Hidden file inputs */}
+                <input ref={uploadInputRef} type="file" multiple accept="*/*" className="hidden"
+                  onChange={(e) => addFiles(e.target.files)} />
+                <input ref={uploadFolderRef} type="file" className="hidden"
+                  {...({ webkitdirectory: '', directory: '' } as any)}
+                  onChange={(e) => addFiles(e.target.files)} />
+              </div>
+
+              {/* File tree preview */}
+              {uploadFiles.length > 0 && (
+                <div className="bg-black border border-zinc-800 rounded-lg overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800 bg-zinc-900/40">
+                    <span className="text-xs text-zinc-400 font-medium">{uploadFiles.length} file{uploadFiles.length !== 1 ? 's' : ''} selected</span>
+                    <button type="button" onClick={() => setUploadFiles([])} className="text-zinc-600 hover:text-red-400 transition-colors">
+                      <XIcon size={13} />
+                    </button>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto divide-y divide-zinc-900">
+                    {uploadFiles.map(({ file, relativePath }) => (
+                      <div key={relativePath} className="flex items-center justify-between px-3 py-1.5">
+                        <span className="text-xs text-zinc-400 font-mono truncate flex-1">{relativePath}</span>
+                        <span className="text-xs text-zinc-600 ml-3 shrink-0">{(file.size / 1024).toFixed(1)} KB</span>
+                        <button type="button"
+                          onClick={() => setUploadFiles(prev => prev.filter(u => u.relativePath !== relativePath))}
+                          className="ml-2 text-zinc-700 hover:text-red-400 shrink-0">
+                          <XIcon size={11} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button type="submit" disabled={uploadStatus.loading || uploadFiles.length === 0}
+                className={'h-10 px-6 rounded-md text-sm font-semibold transition-colors ' + (uploadStatus.loading ? 'bg-zinc-800 text-zinc-500 cursor-wait' : uploadFiles.length === 0 ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 text-white')}>
+                {uploadStatus.loading ? 'Uploading & deploying…' : 'Deploy Static Site'}
+              </button>
+            </form>
+          )}
+
+          {/* ── Result banners (git) ── */}
+          {deployMode === 'git' && (deployStatus.logs || deployStatus.error) && (
             <div className="mt-4 space-y-2">
               {deployedUrl && (
                 <div className="flex items-center gap-2 bg-emerald-950/30 border border-emerald-800/40 rounded-md px-3 py-2">
                   <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
                   <span className="text-xs text-zinc-400">Live at:</span>
-                  <a
-                    href={deployedUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-emerald-400 hover:text-emerald-300 underline truncate"
-                  >
-                    {deployedUrl}
-                  </a>
+                  <a href={deployedUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-400 hover:text-emerald-300 underline truncate">{deployedUrl}</a>
                 </div>
               )}
               {deployedWebhookUrl && (
@@ -470,13 +643,7 @@ export default function ProjectOrchestrator() {
                   <Link size={13} className="text-blue-400 shrink-0" />
                   <span className="text-xs text-zinc-400">Push webhook:</span>
                   <span className="text-xs text-blue-300 font-mono truncate flex-1">{deployedWebhookUrl}</span>
-                  <button
-                    onClick={() => { navigator.clipboard.writeText(deployedWebhookUrl); toast.success('Webhook URL copied.'); }}
-                    className="text-zinc-500 hover:text-zinc-200 shrink-0"
-                    title="Copy webhook URL"
-                  >
-                    <Copy size={13} />
-                  </button>
+                  <button onClick={() => { navigator.clipboard.writeText(deployedWebhookUrl); toast.success('Webhook URL copied.'); }} className="text-zinc-500 hover:text-zinc-200 shrink-0" title="Copy webhook URL"><Copy size={13} /></button>
                 </div>
               )}
               <div className="bg-black border border-zinc-800 rounded-lg p-4 h-40 overflow-y-auto font-mono text-xs">
@@ -485,6 +652,32 @@ export default function ProjectOrchestrator() {
               </div>
             </div>
           )}
+
+          {/* ── Result banners (upload) ── */}
+          {deployMode === 'upload' && (uploadStatus.logs || uploadStatus.error) && (
+            <div className="mt-4 space-y-2">
+              {uploadedUrl && (
+                <div className="flex items-center gap-2 bg-emerald-950/30 border border-emerald-800/40 rounded-md px-3 py-2">
+                  <CheckCircle2 size={13} className="text-emerald-400 shrink-0" />
+                  <span className="text-xs text-zinc-400">Live at:</span>
+                  <a href={uploadedUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-emerald-400 hover:text-emerald-300 underline truncate">{uploadedUrl}</a>
+                </div>
+              )}
+              {uploadedWebhookUrl && (
+                <div className="flex items-center gap-2 bg-blue-950/30 border border-blue-800/40 rounded-md px-3 py-2">
+                  <Link size={13} className="text-blue-400 shrink-0" />
+                  <span className="text-xs text-zinc-400">Re-deploy webhook:</span>
+                  <span className="text-xs text-blue-300 font-mono truncate flex-1">{uploadedWebhookUrl}</span>
+                  <button onClick={() => { navigator.clipboard.writeText(uploadedWebhookUrl); toast.success('Webhook URL copied.'); }} className="text-zinc-500 hover:text-zinc-200 shrink-0"><Copy size={13} /></button>
+                </div>
+              )}
+              <div className="bg-black border border-zinc-800 rounded-lg p-4 h-40 overflow-y-auto font-mono text-xs">
+                {uploadStatus.error && <p className="text-red-400">Error: {uploadStatus.error}</p>}
+                {uploadStatus.logs && <pre className="text-emerald-400 whitespace-pre-wrap">{uploadStatus.logs}</pre>}
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
 
@@ -782,6 +975,9 @@ export default function ProjectOrchestrator() {
                       <div className="flex items-center gap-2 mb-0.5">
                         <span className="text-sm font-medium text-zinc-200">{name}</span>
                         <StatusBadge status={project.health.status} />
+                        {project.deployType === 'static' && (
+                          <span className="text-[10px] font-semibold uppercase tracking-widest text-amber-400 bg-amber-950/40 border border-amber-800/40 rounded px-1.5 py-0.5">Static</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-zinc-600">
                         <span>:{project.port}</span>
@@ -811,9 +1007,9 @@ export default function ProjectOrchestrator() {
                       className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors" title="View logs">
                       {expandedLogs === name ? <ChevronUp size={14} /> : <FileText size={14} />}
                     </button>
-                    <button onClick={() => handleRollback(name, project.repoUrl)}
-                      disabled={actionLoading === 'rollback-' + name}
-                      className="p-2 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800 rounded-md transition-colors" title="Redeploy">
+                    <button onClick={() => handleRollback(name, project.repoUrl || '')}
+                      disabled={actionLoading === 'rollback-' + name || !project.repoUrl}
+                      className="p-2 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800 rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title={project.repoUrl ? 'Redeploy' : 'Re-upload to redeploy (static)'}>
                       <RefreshCw size={14} className={actionLoading === 'rollback-' + name ? 'animate-spin' : ''} />
                     </button>
                     <button onClick={() => handleDelete(name)}
