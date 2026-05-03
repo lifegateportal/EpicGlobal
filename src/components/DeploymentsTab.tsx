@@ -163,18 +163,18 @@ export function DeploymentsTab() {
 
       {/* DEPLOYMENT HISTORY ─────────────────────────────────────────────── */}
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
-        <div className="p-4 border-b border-zinc-800/60 flex justify-between items-center bg-zinc-900/20">
-          <div className="relative">
+        <div className="p-3 sm:p-4 border-b border-zinc-800/60 flex items-center gap-2 bg-zinc-900/20">
+          <div className="relative flex-1 sm:flex-none">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by project or status..."
-              className="bg-black border border-zinc-800 rounded-md py-1.5 pl-9 pr-4 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 w-72"
+              className="bg-black border border-zinc-800 rounded-md py-1.5 pl-9 pr-4 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 w-full sm:w-64"
             />
           </div>
-          <button onClick={fetchAll} className="text-zinc-500 hover:text-zinc-300 transition-colors" title="Refresh">
+          <button onClick={fetchAll} className="text-zinc-500 hover:text-zinc-300 transition-colors shrink-0" title="Refresh">
             <RefreshCw size={14} />
           </button>
         </div>
@@ -197,20 +197,20 @@ export function DeploymentsTab() {
                   key={entry.id}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="p-4 flex items-center justify-between bg-[#0A0A0A] hover:bg-zinc-900/40 transition-colors"
+                  className="p-3 sm:p-4 flex items-center justify-between bg-[#0A0A0A] hover:bg-zinc-900/40 transition-colors"
                 >
-                  <div className="flex items-center gap-4 min-w-0">
+                  <div className="flex items-center gap-3 min-w-0">
                     {entry.status === 'success'
-                      ? <CheckCircle2 size={16} className="text-green-400 shrink-0" />
+                      ? <CheckCircle2 size={15} className="text-green-400 shrink-0" />
                       : entry.status === 'failed'
                       ? <div className="w-4 h-4 rounded-full border-2 border-red-500 text-red-500 flex items-center justify-center text-[9px] font-bold shrink-0">!</div>
-                      : <Trash2 size={16} className="text-zinc-600 shrink-0" />}
+                      : <Trash2 size={15} className="text-zinc-600 shrink-0" />}
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-zinc-200 mb-0.5 truncate">{entry.projectName || 'unknown-project'}</p>
-                      <div className="flex items-center gap-3 text-xs text-zinc-500 flex-wrap">
-                        <span>{new Date(entry.timestamp).toLocaleString()}</span>
+                      <div className="flex items-center gap-2 text-xs text-zinc-500 flex-wrap">
+                        <span className="shrink-0">{new Date(entry.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} <span className="hidden sm:inline">{new Date(entry.timestamp).toLocaleTimeString()}</span></span>
                         {entry.details?.strategy === 'blue-green' && (
-                          <span className="bg-blue-950 text-blue-400 border border-blue-800 rounded px-1.5 py-0.5">blue-green</span>
+                          <span className="hidden sm:inline bg-blue-950 text-blue-400 border border-blue-800 rounded px-1.5 py-0.5">blue-green</span>
                         )}
                         {liveProject && (
                           <span className={`font-medium ${liveProject.health.status === 'online' ? 'text-green-400' : 'text-zinc-500'}`}>
@@ -218,14 +218,14 @@ export function DeploymentsTab() {
                           </span>
                         )}
                         {url && (
-                          <a href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-400 hover:underline truncate max-w-[200px]">
+                          <a href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-400 hover:underline truncate max-w-[120px] sm:max-w-[200px]">
                             {url} <ExternalLink size={10} />
                           </a>
                         )}
                       </div>
                     </div>
                   </div>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ml-4 ${
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ml-2 ${
                     entry.status === 'success' ? 'text-green-400 bg-green-950' :
                     entry.status === 'failed'  ? 'text-red-400 bg-red-950'   :
                     'text-zinc-500 bg-zinc-800/60'
@@ -295,24 +295,24 @@ export function DeploymentsTab() {
                         ) : storedEntries.length > 0 ? (
                           <div className="divide-y divide-zinc-800/40">
                             {/* Column headers */}
-                            <div className="grid grid-cols-[1fr_auto_auto] items-center px-5 py-2 bg-zinc-900/20">
+                            <div className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto] items-center px-4 sm:px-5 py-2 bg-zinc-900/20">
                               <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold">Key</span>
-                              <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold w-40 text-center">Environments</span>
-                              <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold w-32 text-right">Updated</span>
+                              <span className="hidden sm:block text-[10px] uppercase tracking-widest text-zinc-600 font-semibold w-40 text-center">Environments</span>
+                              <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold sm:w-32 text-right">Updated</span>
                             </div>
                             {storedEntries.map(([key]) => (
-                              <div key={key} className="grid grid-cols-[1fr_auto_auto] items-center px-5 py-3 hover:bg-zinc-900/20 transition-colors group">
+                              <div key={key} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto] items-center px-4 sm:px-5 py-3 hover:bg-zinc-900/20 transition-colors group">
                                 <div className="flex items-center gap-2 min-w-0">
                                   <Lock size={12} className="text-zinc-600 shrink-0" />
                                   <span className="text-sm font-mono text-zinc-200 font-medium truncate">{key}</span>
-                                  <span className="text-[10px] border border-zinc-700 text-zinc-500 rounded px-1.5 py-0.5 shrink-0">Sensitive</span>
+                                  <span className="hidden sm:inline text-[10px] border border-zinc-700 text-zinc-500 rounded px-1.5 py-0.5 shrink-0">Sensitive</span>
                                 </div>
-                                <span className="text-xs text-zinc-500 w-40 text-center">Production &amp; Preview</span>
+                                <span className="hidden sm:block text-xs text-zinc-500 w-40 text-center">Production &amp; Preview</span>
                                 {vault.updatedAt ? (
-                                  <span className="text-xs text-zinc-600 w-32 text-right">
+                                  <span className="text-xs text-zinc-600 sm:w-32 text-right">
                                     {new Date(vault.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                   </span>
-                                ) : <span className="w-32" />}
+                                ) : <span className="sm:w-32" />}
                               </div>
                             ))}
                           </div>
