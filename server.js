@@ -434,7 +434,8 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
 }
 
 async function executeOrchestratorDeploy(payload) {
-  const repoUrl = payload.repoUrl;
+  const repoUrl = payload.repoUrl;           // may contain embedded token — used only for git clone
+  const rawRepoUrl = payload.rawRepoUrl || payload.repoUrl; // clean URL stored in registry
   const projectName = payload.projectName;
   const domain = payload.domain;
 
@@ -446,10 +447,14 @@ async function executeOrchestratorDeploy(payload) {
     registry.nextPort += 1;
   }
 
+  // Generate a per-project webhook secret on first deploy, preserve on re-deploys.
+  const webhookSecret = existingProject?.webhookSecret || crypto.randomBytes(24).toString('hex');
+
   registry.projects[projectName] = {
     port: port,
-    repoUrl: repoUrl,
-    domain: domain || existingProject?.domain || undefined
+    repoUrl: rawRepoUrl,          // never store token-embedded URL
+    domain: domain || existingProject?.domain || undefined,
+    webhookSecret
   };
   saveRegistry(registry);
 
@@ -543,6 +548,7 @@ async function executeOrchestratorDeploy(payload) {
       success: true,
       port: port,
       url: url,
+      webhookSecret: webhookSecret,
       terminalOutput: output || 'Deployment finished',
       log: output || 'Deployment finished'
     };
@@ -703,9 +709,24 @@ app.post('/api/deploy', async (req, res) => {
 // API: Backend Orchestrator (PM2) - Sync-Locked Builds
 // ---------------------------------------------------------
 app.post('/api/orchestrator/deploy', async (req, res) => {
-  const repoUrl = String(req.body?.repoUrl || '').trim();
+  const rawRepoUrl = String(req.body?.repoUrl || '').trim();
+  const accessToken = String(req.body?.accessToken || '').trim();
   const projectName = normalizeProjectName(req.body?.projectName);
   const domain = normalizeDomain(req.body?.domain);
+
+  // Embed access token into URL for private repos (never stored in registry).
+  // Supports GitHub, GitLab, Gitea, Bitbucket, and any HTTP-auth-capable git host.
+  let repoUrl = rawRepoUrl;
+  if (accessToken) {
+    try {
+      const parsed = new URL(rawRepoUrl);
+      parsed.username = 'oauth2';        // works for GitLab; GitHub/Gitea ignore username
+      parsed.password = accessToken;
+      repoUrl = parsed.toString();
+    } catch {
+      return res.status(400).json({ success: false, error: 'Invalid repository URL.' });
+    }
+  }
 
   if (!projectName) {
     return res.status(400).json({
@@ -721,7 +742,7 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
     });
   }
 
-  if (!validateUrl(repoUrl)) {
+  if (!validateUrl(rawRepoUrl)) {
     return res.status(400).json({
       success: false,
       error: 'The repository URL must be a valid HTTP(S) URL.'
@@ -736,7 +757,8 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
   }
 
   try {
-    const result = await enqueueDeploy({ projectName, repoUrl, domain });
+    // Pass token-embedded URL for cloning, but raw URL for registry storage (no token at rest).
+    const result = await enqueueDeploy({ projectName, repoUrl, rawRepoUrl, domain });
     return res.json(result);
   } catch (error) {
     const statusCode = error?.statusCode || 500;
@@ -754,6 +776,57 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
 // ---------------------------------------------------------
 app.get('/api/orchestrator/queue', (req, res) => {
   res.json({ success: true, queue: getQueueSnapshot() });
+});
+
+// ---------------------------------------------------------
+// API: Push Webhook — any git host triggers a redeploy
+// POST /api/orchestrator/webhook/:projectName?secret=<token>
+// ---------------------------------------------------------
+app.post('/api/orchestrator/webhook/:projectName', async (req, res) => {
+  const projectName = normalizeProjectName(req.params.projectName);
+  const secret = String(req.query.secret || req.headers['x-webhook-secret'] || '').trim();
+
+  const registry = getRegistry();
+  const project = registry.projects[projectName];
+
+  if (!project) {
+    return res.status(404).json({ success: false, error: 'Project not found.' });
+  }
+
+  if (!project.webhookSecret || !crypto.timingSafeEqual(
+    Buffer.from(secret),
+    Buffer.from(project.webhookSecret)
+  )) {
+    return res.status(401).json({ success: false, error: 'Invalid webhook secret.' });
+  }
+
+  if (isProjectBusy(projectName)) {
+    return res.status(409).json({ success: false, error: 'Deployment already queued or running.' });
+  }
+
+  // Fire-and-forget — respond immediately so the git host doesn't time out.
+  res.json({ success: true, message: 'Redeploy queued for ' + projectName });
+
+  enqueueDeploy({ projectName, repoUrl: project.repoUrl, rawRepoUrl: project.repoUrl, domain: project.domain })
+    .then(() => console.log('[webhook] ' + projectName + ' redeployed via webhook.'))
+    .catch((err) => console.error('[webhook] ' + projectName + ' redeploy failed:', err?.body?.error || err?.message));
+});
+
+// ---------------------------------------------------------
+// API: Webhook secret fetch (so UI can display the hook URL)
+// GET /api/orchestrator/webhook/:projectName/info
+// ---------------------------------------------------------
+app.get('/api/orchestrator/webhook/:projectName/info', (req, res) => {
+  const projectName = normalizeProjectName(req.params.projectName);
+  const registry = getRegistry();
+  const project = registry.projects[projectName];
+
+  if (!project) {
+    return res.status(404).json({ success: false, error: 'Project not found.' });
+  }
+
+  const hookUrl = 'https://api.epicglobal.app/api/orchestrator/webhook/' + projectName + '?secret=' + (project.webhookSecret || '');
+  res.json({ success: true, webhookUrl: hookUrl, projectName });
 });
 
 // ---------------------------------------------------------

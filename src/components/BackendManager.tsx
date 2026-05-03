@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
-import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell } from 'lucide-react';
+import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Copy, Link } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
 import { BASE_URL, API } from '../api/client';
@@ -13,9 +13,12 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function ProjectOrchestrator() {
-  const [form, setForm] = useState({ projectName: '', repoUrl: '', domain: '' });
+  const [form, setForm] = useState({ projectName: '', repoUrl: '', domain: '', accessToken: '' });
   const [deployStatus, setDeployStatus] = useState({ loading: false, logs: '', error: '' });
   const [deployedUrl, setDeployedUrl] = useState('');
+  const [deployedWebhookUrl, setDeployedWebhookUrl] = useState('');
+  const [expandedWebhook, setExpandedWebhook] = useState<string | null>(null);
+  const [webhookUrls, setWebhookUrls] = useState<Record<string, string>>({});
   const [projects, setProjects] = useState<Record<string, Project>>({});
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -299,6 +302,7 @@ export default function ProjectOrchestrator() {
     e.preventDefault();
     setDeployStatus({ loading: true, logs: 'Initiating remote orchestration...', error: '' });
     setDeployedUrl('');
+    setDeployedWebhookUrl('');
 
     try {
       const res = await fetch(API + '/api/orchestrator/deploy', {
@@ -309,11 +313,15 @@ export default function ProjectOrchestrator() {
       const data = await res.json();
 
       if (data.success) {
+        const deployedProjectName = form.projectName.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
         toast.success(form.projectName + ' deployed successfully.');
         const deploymentLog = String(data.log || data.terminalOutput || 'Deployment finished');
         setDeployStatus({ loading: false, logs: deploymentLog, error: '' });
         setDeployedUrl(data.url || '');
-        setForm({ projectName: '', repoUrl: '', domain: '' });
+        if (data.webhookSecret) {
+          setDeployedWebhookUrl('https://api.epicglobal.app/api/orchestrator/webhook/' + deployedProjectName + '?secret=' + data.webhookSecret);
+        }
+        setForm({ projectName: '', repoUrl: '', domain: '', accessToken: '' });
         fetchStatus();
         fetchHistory();
         fetchQueue();
@@ -414,8 +422,8 @@ export default function ProjectOrchestrator() {
                   value={form.projectName} onChange={(e) => setForm({ ...form, projectName: e.target.value })} />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">GitHub Repo URL</label>
-                <input type="url" placeholder="https://github.com/user/repo" required
+                <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">Git Repo URL</label>
+                <input type="url" placeholder="https://github.com / gitlab.com / gitea / …" required
                   className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
                   value={form.repoUrl} onChange={(e) => setForm({ ...form, repoUrl: e.target.value })} />
               </div>
@@ -425,6 +433,15 @@ export default function ProjectOrchestrator() {
                   className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
                   value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">
+                Access Token <span className="text-zinc-600 normal-case">(optional — for private repos)</span>
+              </label>
+              <input type="password" placeholder="GitHub PAT / GitLab token / Bitbucket app password / Gitea token"
+                className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-zinc-600"
+                value={form.accessToken} onChange={(e) => setForm({ ...form, accessToken: e.target.value })} />
+              <p className="text-xs text-zinc-600">Token is embedded into the clone URL and never stored or logged.</p>
             </div>
             <button type="submit" disabled={deployStatus.loading}
               className={'h-10 px-6 rounded-md text-sm font-semibold transition-colors ' + (deployStatus.loading ? 'bg-zinc-800 text-zinc-500 cursor-wait' : 'bg-indigo-600 hover:bg-indigo-500 text-white')}>
@@ -446,6 +463,20 @@ export default function ProjectOrchestrator() {
                   >
                     {deployedUrl}
                   </a>
+                </div>
+              )}
+              {deployedWebhookUrl && (
+                <div className="flex items-center gap-2 bg-blue-950/30 border border-blue-800/40 rounded-md px-3 py-2">
+                  <Link size={13} className="text-blue-400 shrink-0" />
+                  <span className="text-xs text-zinc-400">Push webhook:</span>
+                  <span className="text-xs text-blue-300 font-mono truncate flex-1">{deployedWebhookUrl}</span>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(deployedWebhookUrl); toast.success('Webhook URL copied.'); }}
+                    className="text-zinc-500 hover:text-zinc-200 shrink-0"
+                    title="Copy webhook URL"
+                  >
+                    <Copy size={13} />
+                  </button>
                 </div>
               )}
               <div className="bg-black border border-zinc-800 rounded-lg p-4 h-40 overflow-y-auto font-mono text-xs">
@@ -761,6 +792,21 @@ export default function ProjectOrchestrator() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 ml-4 shrink-0">
+                    <button
+                      onClick={async () => {
+                        if (expandedWebhook === name) { setExpandedWebhook(null); return; }
+                        setExpandedWebhook(name);
+                        if (!webhookUrls[name]) {
+                          try {
+                            const r = await fetch(`${API}/api/orchestrator/webhook/${encodeURIComponent(name)}/info`);
+                            const d = await r.json();
+                            if (d.success) setWebhookUrls(prev => ({ ...prev, [name]: d.webhookUrl }));
+                          } catch { /* silent */ }
+                        }
+                      }}
+                      className="p-2 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800 rounded-md transition-colors" title="Webhook URL">
+                      <Link size={14} />
+                    </button>
                     <button onClick={() => handleFetchLogs(name)}
                       className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors" title="View logs">
                       {expandedLogs === name ? <ChevronUp size={14} /> : <FileText size={14} />}
@@ -777,6 +823,29 @@ export default function ProjectOrchestrator() {
                     </button>
                   </div>
                 </div>
+                {expandedWebhook === name && (
+                  <div className="px-4 pb-3 bg-black border-t border-zinc-900">
+                    <div className="flex items-center gap-2 bg-blue-950/20 border border-blue-900/30 rounded-md px-3 py-2 mt-3">
+                      <Link size={12} className="text-blue-400 shrink-0" />
+                      <span className="text-xs text-zinc-500">Push webhook URL:</span>
+                      <span className="text-xs text-blue-300 font-mono truncate flex-1">
+                        {webhookUrls[name] || 'Loading…'}
+                      </span>
+                      {webhookUrls[name] && (
+                        <button
+                          onClick={() => { navigator.clipboard.writeText(webhookUrls[name]); toast.success('Webhook URL copied.'); }}
+                          className="text-zinc-500 hover:text-zinc-200 shrink-0"
+                          title="Copy"
+                        >
+                          <Copy size={12} />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-600 mt-1.5 px-1">
+                      Paste this URL into your repo's webhook settings (GitHub → Settings → Webhooks, GitLab → Settings → Integrations, etc.) to auto-redeploy on every push.
+                    </p>
+                  </div>
+                )}
                 {expandedLogs === name && (
                   <div className="px-4 pb-4 bg-black">
                     <pre className="text-xs text-zinc-400 font-mono whitespace-pre-wrap h-48 overflow-y-auto p-3 border border-zinc-800 rounded-md">

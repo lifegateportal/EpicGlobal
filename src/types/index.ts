@@ -12,6 +12,7 @@ export type Project = {
   port: number;
   repoUrl: string;
   domain?: string;
+  webhookSecret?: string;
   health: ProjectHealth;
 };
 
