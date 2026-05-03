@@ -118,7 +118,7 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-black text-zinc-300 font-sans antialiased selection:bg-purple-500/30 pb-12">
+    <div className="min-h-screen bg-black text-zinc-300 font-sans antialiased selection:bg-purple-500/30 pb-8 md:pb-12">
       <Toaster theme="dark" position="bottom-right" className="font-sans" />
       <KeyboardHUD />
       <CommandPalette setTab={handleTabSwitch} openTerminal={() => setIsTerminalOpen(true)} />
@@ -135,37 +135,39 @@ export default function App() {
       />
 
       {isOffline && (
-        <div className="bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-500 text-xs font-medium py-2 px-6 flex items-center justify-center gap-3">
+        <div className="bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-500 text-xs font-medium py-2 px-4 md:px-6 flex items-center justify-center gap-2 text-center">
           Working offline. Changes will sync when connection is restored.
         </div>
       )}
 
-      <main className="max-w-6xl mx-auto px-6 py-10">
-        <div className="flex justify-between items-end mb-8 gap-4">
+      <main className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-10">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-6 md:mb-8 gap-4">
           <div>
-            <h1 className="text-3xl font-semibold text-zinc-100 tracking-tight mb-2">Production Deployment</h1>
+            <h1 className="text-2xl md:text-3xl font-semibold text-zinc-100 tracking-tight mb-1.5 md:mb-2">Production Deployment</h1>
             <p className="text-sm text-zinc-500">Your application is live and receiving traffic.</p>
           </div>
-          <div className="flex gap-3">
-            <button onClick={() => setIsTerminalOpen(true)} className="h-9 px-4 bg-zinc-900 border border-zinc-800 text-zinc-300 text-sm font-medium rounded-md hover:bg-zinc-800 transition-colors">Command & Logs</button>
+          <div className="flex gap-3 w-full sm:w-auto">
+            <button onClick={() => setIsTerminalOpen(true)} className="h-10 px-4 bg-zinc-900 border border-zinc-800 text-zinc-300 text-sm font-medium rounded-md hover:bg-zinc-800 transition-colors w-full sm:w-auto">Command & Logs</button>
           </div>
         </div>
 
         {/* Updated Tab Navigation Rendering */}
-        <div className="flex gap-6 border-b border-zinc-800/60 mb-8 overflow-x-auto whitespace-nowrap">
-          {navTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => handleTabSwitch(tab.id)}
-              className={`pb-3 text-sm font-medium transition-colors ${
-                activeTab === tab.id
-                  ? 'text-zinc-100 border-b-2 border-white'
-                  : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="mb-6 md:mb-8 border-b border-zinc-800/60 -mx-4 px-4 md:mx-0 md:px-0 overflow-x-auto">
+          <div className="flex gap-2 md:gap-6 whitespace-nowrap min-w-max">
+            {navTabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => handleTabSwitch(tab.id)}
+                className={`h-10 px-3 md:px-0 md:h-auto md:pb-3 text-sm font-medium rounded-md md:rounded-none transition-colors ${
+                  activeTab === tab.id
+                    ? 'text-zinc-100 bg-zinc-900 md:bg-transparent md:border-b-2 md:border-white'
+                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/60 md:hover:bg-transparent'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className={`transition-opacity duration-300 ${isNavigating ? 'opacity-0' : 'opacity-100'}`}>
