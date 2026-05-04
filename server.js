@@ -963,6 +963,59 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
 });
 
 // ---------------------------------------------------------
+// API: Rename Static Project
+// ---------------------------------------------------------
+app.post('/api/orchestrator/rename', async (req, res) => {
+  try {
+    const oldName = normalizeProjectName(req.body?.oldName);
+    const newName = normalizeProjectName(req.body?.newName);
+
+    if (!oldName || !newName) {
+      return res.status(400).json({ success: false, error: 'oldName and newName are required.' });
+    }
+    if (oldName === newName) {
+      return res.status(400).json({ success: false, error: 'New name is the same as old name.' });
+    }
+
+    const registry = getRegistry();
+    const project = registry.projects[oldName];
+    if (!project) {
+      return res.status(404).json({ success: false, error: 'Project not found.' });
+    }
+    if (project.deployType !== 'static') {
+      return res.status(400).json({ success: false, error: 'Rename is only supported for static projects.' });
+    }
+    if (registry.projects[newName]) {
+      return res.status(409).json({ success: false, error: 'A project named "' + newName + '" already exists.' });
+    }
+
+    const oldDir = path.join(DEPLOY_ROOT, oldName);
+    const newDir = path.join(DEPLOY_ROOT, newName);
+
+    if (fs.existsSync(oldDir)) {
+      fs.renameSync(oldDir, newDir);
+    }
+
+    registry.projects[newName] = {
+      ...project,
+      name: newName,
+      staticDir: project.staticDir ? project.staticDir.replace(oldDir, newDir) : newDir,
+    };
+    delete registry.projects[oldName];
+    saveRegistry(registry);
+
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+
+    appendHistory(newName, 'success', { url: 'https://' + newName + '.epicglobal.app', strategy: 'rename' });
+
+    res.json({ success: true, newName });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
 // API: Deployment History
 // ---------------------------------------------------------
 app.get('/api/orchestrator/history', (req, res) => {

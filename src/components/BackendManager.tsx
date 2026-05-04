@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
-import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell } from 'lucide-react';
+import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Pencil, ExternalLink, Check, X } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
 import { BASE_URL, API } from '../api/client';
@@ -33,6 +33,8 @@ export default function ProjectOrchestrator() {
   const [vaultPreview, setVaultPreview] = useState<Record<string, string>>({});
   const [vaultUpdatedAt, setVaultUpdatedAt] = useState<string | null>(null);
   const [backups, setBackups] = useState<BackupManifest[]>([]);
+  const [renamingProject, setRenamingProject] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const [watchdog, setWatchdog] = useState<Record<string, WatchdogEntry>>({});
   const [alertConfig, setAlertConfig] = useState<AlertConfig | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
@@ -387,6 +389,56 @@ export default function ProjectOrchestrator() {
     } catch {
       toast.error('Could not reach API.');
       setDeployStatus({ loading: false, logs: '', error: 'Connection failed.' });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRename = async (oldName: string) => {
+    const newName = renameValue.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    if (!newName || newName === oldName) { setRenamingProject(null); return; }
+    setActionLoading('rename-' + oldName);
+    try {
+      const res = await fetch(API + '/api/orchestrator/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldName, newName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Renamed to ' + data.newName + '.');
+        setRenamingProject(null);
+        fetchStatus();
+      } else {
+        toast.error(data.error || 'Rename failed.');
+      }
+    } catch {
+      toast.error('Could not reach API.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRename = async (oldName: string) => {
+    const newName = renameValue.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+    if (!newName || newName === oldName) { setRenamingProject(null); return; }
+    setActionLoading('rename-' + oldName);
+    try {
+      const res = await fetch(API + '/api/orchestrator/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldName, newName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Renamed to ' + data.newName + '.');
+        setRenamingProject(null);
+        fetchStatus();
+      } else {
+        toast.error(data.error || 'Rename failed.');
+      }
+    } catch {
+      toast.error('Could not reach API.');
     } finally {
       setActionLoading(null);
     }
@@ -846,34 +898,84 @@ export default function ProjectOrchestrator() {
               <div key={name}>
                 <div className="p-3 sm:p-4 flex items-center justify-between hover:bg-zinc-900/20 transition-colors">
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-0.5">
-                        <span className="text-sm font-medium text-zinc-200 truncate">{name}</span>
-                        <StatusBadge status={project.health.status} />
+                        {/* Rename inline editor for static projects */}
+                        {renamingProject === name ? (
+                          <form onSubmit={(e) => { e.preventDefault(); handleRename(name); }} className="flex items-center gap-1">
+                            <input
+                              autoFocus
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              className="bg-black border border-zinc-600 rounded px-2 py-0.5 text-sm text-zinc-100 focus:outline-none focus:border-white w-36"
+                              onKeyDown={(e) => e.key === 'Escape' && setRenamingProject(null)}
+                            />
+                            <button type="submit" className="p-1 text-green-400 hover:text-green-300"><Check size={13} /></button>
+                            <button type="button" onClick={() => setRenamingProject(null)} className="p-1 text-zinc-500 hover:text-zinc-300"><X size={13} /></button>
+                          </form>
+                        ) : (
+                          <span className="text-sm font-medium text-zinc-200 truncate">{name}</span>
+                        )}
+                        <StatusBadge status={project.deployType === 'static' ? 'online' : project.health.status} />
+                        {project.deployType === 'static' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800 font-medium">Static</span>
+                        )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-600">
-                        <span>:{project.port}</span>
-                        {project.domain && <span className="truncate max-w-[140px] sm:max-w-none">{project.domain}</span>}
-                        <span>{project.health.memory}MB</span>
-                        <span className="hidden sm:inline">{project.health.restarts} restarts</span>
+                        {project.deployType === 'static' ? (
+                          <a
+                            href={'https://' + name + '.epicglobal.app'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-blue-400 hover:text-blue-300 truncate max-w-[200px]"
+                          >
+                            {name}.epicglobal.app <ExternalLink size={10} />
+                          </a>
+                        ) : (
+                          <>
+                            <span>:{project.port}</span>
+                            {project.domain && <span className="truncate max-w-[140px] sm:max-w-none">{project.domain}</span>}
+                            <span>{project.health.memory}MB</span>
+                            <span className="hidden sm:inline">{project.health.restarts} restarts</span>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-0.5 sm:gap-1 ml-2 shrink-0">
-                    <button onClick={() => handleFetchLogs(name)}
-                      className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors" title="View logs">
-                      {expandedLogs === name ? <ChevronUp size={14} /> : <FileText size={14} />}
-                    </button>
-                    <button onClick={() => handleRollback(name, project.repoUrl)}
-                      disabled={actionLoading === 'rollback-' + name}
-                      className="p-2 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800 rounded-md transition-colors" title="Redeploy">
-                      <RefreshCw size={14} className={actionLoading === 'rollback-' + name ? 'animate-spin' : ''} />
-                    </button>
-                    <button onClick={() => handleDelete(name)}
-                      disabled={actionLoading === 'delete-' + name}
-                      className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded-md transition-colors" title="Delete">
-                      <Trash2 size={14} />
-                    </button>
+                    {project.deployType === 'static' ? (
+                      <>
+                        <button
+                          onClick={() => { setRenamingProject(name); setRenameValue(name); }}
+                          className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
+                          title="Rename project"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => handleDelete(name)}
+                          disabled={actionLoading === 'delete-' + name}
+                          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded-md transition-colors" title="Delete">
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button onClick={() => handleFetchLogs(name)}
+                          className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors" title="View logs">
+                          {expandedLogs === name ? <ChevronUp size={14} /> : <FileText size={14} />}
+                        </button>
+                        <button onClick={() => handleRollback(name, project.repoUrl)}
+                          disabled={actionLoading === 'rollback-' + name}
+                          className="p-2 text-zinc-500 hover:text-blue-400 hover:bg-zinc-800 rounded-md transition-colors" title="Redeploy">
+                          <RefreshCw size={14} className={actionLoading === 'rollback-' + name ? 'animate-spin' : ''} />
+                        </button>
+                        <button onClick={() => handleDelete(name)}
+                          disabled={actionLoading === 'delete-' + name}
+                          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded-md transition-colors" title="Delete">
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
                 {expandedLogs === name && (
