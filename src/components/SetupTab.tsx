@@ -1,12 +1,31 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useRef, type FormEvent, type ChangeEvent } from 'react';
 import {
-  CheckCircle2, XCircle, AlertCircle, Copy, Check, RefreshCw,
-  Terminal, Globe, Key, Cpu, Layers, ChevronDown, ChevronRight,
-  ExternalLink, Server, ShieldCheck, Zap, BookOpen
+  Github, GitBranch, Upload, Zap, ArrowRight, ArrowLeft,
+  CheckCircle2, XCircle, Loader2, ExternalLink, Copy, Check,
+  Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X
 } from 'lucide-react';
-import { API, ORCHESTRATOR_API_KEY, BASE_URL } from '../api/client';
+import { toast } from 'sonner';
+import { API, ORCHESTRATOR_API_KEY, apiFetch } from '../api/client';
 
-/* ─── tiny helpers ─────────────────────────────────────────────── */
+/* ─── types ─────────────────────────────────────────────────────── */
+type Source = 'github' | 'epicodespaces' | 'git' | 'upload';
+
+type EnvRow = { id: number; key: string; value: string };
+
+type DeployState =
+  | { phase: 'idle' }
+  | { phase: 'deploying' }
+  | { phase: 'success'; url: string; log: string }
+  | { phase: 'error'; message: string; log: string };
+
+/* ─── helpers ───────────────────────────────────────────────────── */
+let envRowId = 0;
+const newEnvRow = (): EnvRow => ({ id: ++envRowId, key: '', value: '' });
+
+function slugify(v: string) {
+  return v.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -19,527 +38,561 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
-function CodeBlock({ code, lang = 'bash' }: { code: string; lang?: string }) {
+/* ─── source tiles ───────────────────────────────────────────────── */
+const SOURCES: { id: Source; label: string; sub: string; icon: React.ReactNode; accent: string }[] = [
+  {
+    id: 'github',
+    label: 'GitHub',
+    sub: 'Clone & deploy any public or private repository',
+    icon: <Github size={22} />,
+    accent: 'hover:border-zinc-500 hover:bg-zinc-900/40',
+  },
+  {
+    id: 'epicodespaces',
+    label: 'EpiCodeSpaces',
+    sub: 'Push from your IDE using the API connection',
+    icon: <FileCode2 size={22} />,
+    accent: 'hover:border-indigo-500/60 hover:bg-indigo-950/20',
+  },
+  {
+    id: 'git',
+    label: 'Custom Git URL',
+    sub: 'Any git remote — GitLab, Bitbucket, self-hosted',
+    icon: <GitBranch size={22} />,
+    accent: 'hover:border-emerald-500/60 hover:bg-emerald-950/20',
+  },
+  {
+    id: 'upload',
+    label: 'File / ZIP Upload',
+    sub: 'Upload a built static site or a ZIP archive',
+    icon: <Upload size={22} />,
+    accent: 'hover:border-amber-500/60 hover:bg-amber-950/20',
+  },
+];
+
+/* ─── step indicator ─────────────────────────────────────────────── */
+function StepDot({ n, active, done }: { n: number; active: boolean; done: boolean }) {
   return (
-    <div className="relative bg-zinc-950 border border-zinc-800 rounded-md">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-        <span className="text-zinc-600 text-xs font-mono">{lang}</span>
-        <CopyBtn text={code} />
-      </div>
-      <pre className="p-3 text-xs text-zinc-300 font-mono overflow-x-auto whitespace-pre leading-relaxed">{code}</pre>
+    <div className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-xs font-bold transition-all
+      ${done ? 'border-green-500 bg-green-500/20 text-green-400' : active ? 'border-white bg-white/10 text-zinc-100' : 'border-zinc-700 text-zinc-600'}`}>
+      {done ? <Check size={13} /> : n}
     </div>
   );
 }
 
-function StatusBadge({ ok, label }: { ok: boolean | null; label: string }) {
-  if (ok === null) return (
-    <span className="flex items-center gap-1.5 text-zinc-500 text-xs">
-      <span className="w-2 h-2 rounded-full bg-zinc-600 animate-pulse inline-block" />{label}
-    </span>
-  );
-  if (ok) return (
-    <span className="flex items-center gap-1.5 text-green-400 text-xs font-medium">
-      <CheckCircle2 size={13} />{label}
-    </span>
-  );
-  return (
-    <span className="flex items-center gap-1.5 text-red-400 text-xs font-medium">
-      <XCircle size={13} />{label}
-    </span>
-  );
-}
-
-type CollapsibleProps = { title: string; icon: React.ReactNode; accent?: string; defaultOpen?: boolean; children: React.ReactNode };
-function Collapsible({ title, icon, accent = 'border-zinc-800/60', defaultOpen = false, children }: CollapsibleProps) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className={`border ${accent} bg-[#0A0A0A] rounded-xl overflow-hidden shadow-xl`}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between p-5 hover:bg-zinc-900/30 transition-colors"
-      >
-        <div className="flex items-center gap-2.5">
-          {icon}
-          <span className="text-sm font-semibold text-zinc-100">{title}</span>
-        </div>
-        {open ? <ChevronDown size={15} className="text-zinc-500" /> : <ChevronRight size={15} className="text-zinc-500" />}
-      </button>
-      {open && <div className="border-t border-zinc-800/60 p-5 space-y-4">{children}</div>}
-    </div>
-  );
-}
-
-/* ─── env var definitions ───────────────────────────────────────── */
-const ENV_VARS = [
-  {
-    key: 'VITE_SOCKET_URL',
-    desc: 'WebSocket & HTTP API origin. Points to your Orchestrator server.',
-    example: 'https://api.epicglobal.app',
-    value: import.meta.env.VITE_SOCKET_URL?.trim() || '',
-    required: true,
-  },
-  {
-    key: 'VITE_ORCHESTRATOR_API_KEY',
-    desc: 'Secret API key sent in x-api-key header for protected endpoints.',
-    example: 'my-super-secret-key-32chars',
-    value: import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '',
-    required: true,
-  },
-  {
-    key: 'VITE_AUTH_PASSWORD',
-    desc: 'Dashboard login password. Defaults to "epicglobal" if not set.',
-    example: 'ChangeMeNow!',
-    value: import.meta.env.VITE_AUTH_PASSWORD?.trim() || '',
-    required: false,
-  },
-] as const;
-
-/* ─── setup steps ───────────────────────────────────────────────── */
-const SETUP_STEPS = [
-  {
-    num: 1,
-    title: 'Provision DigitalOcean Droplet',
-    desc: 'Create an Ubuntu 22.04/24.04 LTS droplet (recommended: Basic, 2 GB RAM). Enable SSH key auth. Note the public IPv4.',
-  },
-  {
-    num: 2,
-    title: 'Install Node.js, PM2 & Caddy',
-    desc: 'SSH into your droplet and run the bootstrap script below.',
-  },
-  {
-    num: 3,
-    title: 'Clone EpicGlobal & install deps',
-    desc: 'Pull the repo and install server dependencies.',
-  },
-  {
-    num: 4,
-    title: 'Configure environment variables',
-    desc: 'Create a .env file for the frontend build and set server env vars.',
-  },
-  {
-    num: 5,
-    title: 'Build frontend & start Orchestrator',
-    desc: 'Build the React dashboard and start the Node server under PM2.',
-  },
-  {
-    num: 6,
-    title: 'Configure Caddy',
-    desc: 'Point Caddy at your domain and auto-TLS every subdomain.',
-  },
-  {
-    num: 7,
-    title: 'Point DNS',
-    desc: 'Add an A record for *.epicglobal.app → your droplet IP.',
-  },
-] as const;
-
-/* ─── main component ────────────────────────────────────────────── */
+/* ─── main component ─────────────────────────────────────────────── */
 export function SetupTab() {
-  const [apiStatus, setApiStatus] = useState<boolean | null>(null);
-  const [apiLatency, setApiLatency] = useState<number | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [completedSteps, setCompletedSteps] = useState<Set<number>>(() => {
-    try { return new Set(JSON.parse(localStorage.getItem('eg_setup_steps') || '[]')); }
-    catch { return new Set(); }
-  });
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [source, setSource] = useState<Source | null>(null);
 
-  const checkApi = useCallback(async () => {
-    setChecking(true);
-    setApiStatus(null);
-    const t0 = performance.now();
-    try {
-      const res = await fetch(API + '/api/orchestrator/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
-      setApiLatency(Math.round(performance.now() - t0));
-      setApiStatus(res.ok);
-    } catch {
-      setApiLatency(null);
-      setApiStatus(false);
-    } finally {
-      setChecking(false);
-    }
-  }, []);
+  /* form fields */
+  const [repoUrl, setRepoUrl]           = useState('');
+  const [projectName, setProjectName]   = useState('');
+  const [domain, setDomain]             = useState('');
+  const [accessToken, setAccessToken]   = useState('');
+  const [envRows, setEnvRows]           = useState<EnvRow[]>([]);
+  const [uploadFile, setUploadFile]     = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { checkApi(); }, [checkApi]);
+  /* deploy state */
+  const [deployState, setDeployState] = useState<DeployState>({ phase: 'idle' });
+  const [logLines, setLogLines]         = useState('');
+  const logRef = useRef<HTMLPreElement>(null);
 
-  const toggleStep = (n: number) => {
-    setCompletedSteps(prev => {
-      const next = new Set(prev);
-      next.has(n) ? next.delete(n) : next.add(n);
-      localStorage.setItem('eg_setup_steps', JSON.stringify([...next]));
-      return next;
-    });
+  /* ── helpers ── */
+  const autoSlug = (url: string) => {
+    const match = url.match(/\/([^/]+?)(?:\.git)?$/);
+    if (match) setProjectName(slugify(match[1]));
   };
 
-  const envAll = ENV_VARS.filter(v => v.required).every(v => v.value);
-  const progress = Math.round((completedSteps.size / SETUP_STEPS.length) * 100);
+  const autoDomain = (name: string) => {
+    if (name) setDomain(`${name}.epicglobal.app`);
+  };
 
-  const dotenvContent = ENV_VARS.map(v => `${v.key}=${v.value || v.example}`).join('\n');
+  const updateEnvRow = (id: number, patch: Partial<EnvRow>) =>
+    setEnvRows(rows => rows.map(r => r.id === id ? { ...r, ...patch } : r));
 
+  const removeEnvRow = (id: number) =>
+    setEnvRows(rows => rows.filter(r => r.id !== id));
+
+  const envText = envRows
+    .filter(r => r.key.trim())
+    .map(r => `${r.key.trim()}=${r.value}`)
+    .join('\n');
+
+  const canProceedStep1 = source !== null;
+  const canProceedStep2 = source === 'upload'
+    ? Boolean(projectName.trim() && uploadFile)
+    : Boolean(projectName.trim() && repoUrl.trim());
+
+  /* ── deploy ── */
+  const handleDeploy = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!ORCHESTRATOR_API_KEY) {
+      toast.error('VITE_ORCHESTRATOR_API_KEY not set — cannot reach Orchestrator.');
+      return;
+    }
+
+    setDeployState({ phase: 'deploying' });
+    setLogLines('Connecting to Orchestrator…\n');
+
+    try {
+      let data: { success: boolean; url?: string; log?: string; terminalOutput?: string; error?: string };
+
+      if (source === 'upload') {
+        if (!uploadFile) { toast.error('Select a file.'); setDeployState({ phase: 'idle' }); return; }
+        const fd = new FormData();
+        fd.append('file', uploadFile);
+        fd.append('projectName', slugify(projectName));
+        if (domain.trim()) fd.append('domain', domain.trim());
+        if (envText) fd.append('envText', envText);
+        const res = await apiFetch(`${API}/api/orchestrator/upload`, { method: 'POST', body: fd });
+        data = await res.json();
+      } else {
+        const payload: Record<string, string> = {
+          projectName: slugify(projectName),
+          repoUrl: repoUrl.trim(),
+          domain: domain.trim() || `${slugify(projectName)}.epicglobal.app`,
+        };
+        if (accessToken.trim()) payload.accessToken = accessToken.trim();
+        if (envText) payload.envText = envText;
+        const res = await apiFetch(`${API}/api/orchestrator/deploy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        data = await res.json();
+      }
+
+      const log = String(data.terminalOutput || data.log || '').trim();
+      setLogLines(log);
+      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+
+      if (data.success) {
+        setDeployState({ phase: 'success', url: data.url || `https://${domain || slugify(projectName) + '.epicglobal.app'}`, log });
+        toast.success(`${projectName} deployed successfully!`);
+      } else {
+        setDeployState({ phase: 'error', message: data.error || 'Deployment failed.', log });
+        toast.error(data.error || 'Deployment failed.');
+      }
+    } catch (err) {
+      const msg = 'Could not reach API. Check VITE_SOCKET_URL and API key.';
+      setLogLines(msg);
+      setDeployState({ phase: 'error', message: msg, log: msg });
+      toast.error(msg);
+    }
+  };
+
+  /* ── reset ── */
+  const reset = () => {
+    setStep(1); setSource(null);
+    setRepoUrl(''); setProjectName(''); setDomain(''); setAccessToken('');
+    setEnvRows([]); setUploadFile(null); setLogLines('');
+    setDeployState({ phase: 'idle' });
+  };
+
+  /* ────────────────── render ────────────────────────────────────── */
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
 
-      {/* ── hero header ── */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-zinc-100 mb-1">Platform Setup</h2>
-            <p className="text-sm text-zinc-500 max-w-xl">
-              Everything you need to go from a blank DigitalOcean droplet to a fully running EpicGlobal
-              deployment platform — Caddy, PM2, Orchestrator, and auto-SSL included.
-            </p>
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="text-2xl font-bold text-zinc-100">{progress}%</div>
-            <div className="text-xs text-zinc-600 mt-0.5">setup complete</div>
-          </div>
+      {/* header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-zinc-100">Connect a Project</h2>
+          <p className="text-sm text-zinc-500 mt-0.5">Deploy any repo or file to your EpicGlobal platform in seconds.</p>
         </div>
 
-        {/* progress bar */}
-        <div className="mt-5 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-white rounded-full transition-all duration-500"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        {/* live health strip */}
-        <div className="mt-5 flex flex-wrap gap-6 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500">API Endpoint:</span>
-            <code className="text-indigo-300">{API || '(not set)'}</code>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500">API Status:</span>
-            <StatusBadge ok={apiStatus} label={apiStatus === null ? 'Checking…' : apiStatus ? `Online ${apiLatency ? `· ${apiLatency}ms` : ''}` : 'Unreachable'} />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500">Env Vars:</span>
-            <StatusBadge ok={envAll} label={envAll ? 'All required vars set' : 'Missing required vars'} />
-          </div>
-          <button
-            onClick={checkApi}
-            disabled={checking}
-            className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-100 transition-colors ml-auto"
-          >
-            <RefreshCw size={12} className={checking ? 'animate-spin' : ''} />
-            Re-check
-          </button>
+        {/* step dots */}
+        <div className="hidden sm:flex items-center gap-2">
+          {([1, 2, 3] as const).map((n, i) => (
+            <>
+              <StepDot key={n} n={n} active={step === n} done={step > n} />
+              {i < 2 && <div key={`sep-${n}`} className={`w-8 h-px ${step > n ? 'bg-green-600' : 'bg-zinc-800'}`} />}
+            </>
+          ))}
         </div>
       </div>
 
-      {/* ── env var status ── */}
-      <Collapsible
-        title="Environment Variables"
-        icon={<Key size={15} className="text-amber-400" />}
-        accent={envAll ? 'border-zinc-800/60' : 'border-amber-700/40'}
-        defaultOpen={!envAll}
-      >
-        <p className="text-xs text-zinc-500">
-          These must be baked into your frontend at build time via a <code className="bg-zinc-900 px-1 rounded">.env</code> file or your CI/CD secrets.
-        </p>
-
-        <div className="space-y-3">
-          {ENV_VARS.map(v => {
-            const isSet = Boolean(v.value);
-            return (
-              <div key={v.key} className={`border rounded-lg p-4 ${isSet ? 'border-zinc-800' : v.required ? 'border-amber-700/40 bg-amber-950/10' : 'border-zinc-800'}`}>
-                <div className="flex items-center justify-between gap-2 mb-1.5">
-                  <code className="text-sm text-zinc-100 font-mono">{v.key}</code>
-                  <div className="flex items-center gap-2">
-                    {v.required && !isSet && <span className="text-amber-400 text-xs font-medium">required</span>}
-                    {!v.required && <span className="text-zinc-600 text-xs">optional</span>}
-                    <StatusBadge ok={isSet} label={isSet ? 'Set' : 'Not set'} />
-                  </div>
-                </div>
-                <p className="text-xs text-zinc-500 mb-2">{v.desc}</p>
-                {!isSet && (
-                  <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1.5">
-                    <span className="text-zinc-600 text-xs font-mono">{v.key}=</span>
-                    <code className="text-xs text-zinc-400 font-mono">{v.example}</code>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div>
-          <p className="text-xs text-zinc-500 mb-2">Full <code className="bg-zinc-900 px-1 rounded">.env</code> template:</p>
-          <CodeBlock code={dotenvContent} lang=".env" />
-        </div>
-      </Collapsible>
-
-      {/* ── step-by-step guide ── */}
-      <Collapsible
-        title="First-Time Setup Guide"
-        icon={<BookOpen size={15} className="text-purple-400" />}
-        accent="border-purple-900/40"
-        defaultOpen
-      >
-        <p className="text-xs text-zinc-500">Click a step to check it off. Steps persist in your browser.</p>
-
-        <div className="space-y-3">
-          {SETUP_STEPS.map(step => {
-            const done = completedSteps.has(step.num);
-            return (
-              <div
-                key={step.num}
-                onClick={() => toggleStep(step.num)}
-                className={`flex gap-3 p-4 rounded-lg border cursor-pointer transition-all ${done ? 'border-green-800/40 bg-green-950/10' : 'border-zinc-800 hover:border-zinc-700'}`}
+      {/* ═══ STEP 1 — choose source ═══════════════════════════════ */}
+      {step === 1 && (
+        <div className="space-y-4">
+          <p className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">1 — Choose a source</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {SOURCES.map(s => (
+              <button
+                key={s.id}
+                onClick={() => setSource(s.id)}
+                className={`text-left flex items-start gap-4 p-5 rounded-xl border transition-all
+                  ${source === s.id
+                    ? 'border-white bg-white/5 shadow-lg shadow-white/5'
+                    : `border-zinc-800 bg-[#0A0A0A] ${s.accent}`}
+                `}
               >
-                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5 transition-colors ${done ? 'border-green-500 bg-green-500/20' : 'border-zinc-600'}`}>
-                  {done ? <Check size={12} className="text-green-400" /> : <span className="text-xs text-zinc-500 font-bold">{step.num}</span>}
-                </div>
+                <div className={`mt-0.5 ${source === s.id ? 'text-zinc-100' : 'text-zinc-500'}`}>{s.icon}</div>
                 <div>
-                  <p className={`text-sm font-medium mb-0.5 ${done ? 'text-zinc-500 line-through' : 'text-zinc-200'}`}>{step.title}</p>
-                  <p className="text-xs text-zinc-600">{step.desc}</p>
+                  <p className={`text-sm font-semibold mb-1 ${source === s.id ? 'text-zinc-100' : 'text-zinc-300'}`}>{s.label}</p>
+                  <p className="text-xs text-zinc-500 leading-relaxed">{s.sub}</p>
                 </div>
+                {source === s.id && (
+                  <Check size={15} className="text-white ml-auto mt-0.5 shrink-0" />
+                )}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              onClick={() => canProceedStep1 && setStep(2)}
+              disabled={!canProceedStep1}
+              className="flex items-center gap-2 px-5 py-2.5 bg-white text-black text-sm font-medium rounded-lg disabled:opacity-30 hover:bg-zinc-200 transition-colors"
+            >
+              Continue <ArrowRight size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ STEP 2 — configure ═══════════════════════════════════ */}
+      {step === 2 && source && (
+        <form onSubmit={e => { e.preventDefault(); if (canProceedStep2) setStep(3); }} className="space-y-5">
+          <p className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">2 — Configure</p>
+
+          {/* EpiCodeSpaces info banner */}
+          {source === 'epicodespaces' && (
+            <div className="border border-indigo-800/40 bg-indigo-950/20 rounded-xl p-5 space-y-3">
+              <div className="flex items-center gap-2.5">
+                <Link2 size={15} className="text-indigo-400" />
+                <p className="text-sm font-medium text-zinc-100">EpiCodeSpaces Connection</p>
               </div>
-            );
-          })}
-        </div>
-      </Collapsible>
+              <p className="text-xs text-zinc-400">
+                In your EpiCodeSpaces IDE, set these two environment variables then call the deploy endpoint from your project:
+              </p>
+              <div className="space-y-2">
+                {[
+                  ['EPICGLOBAL_API_URL', API],
+                  ['EPICGLOBAL_API_KEY', ORCHESTRATOR_API_KEY || '(not set — add VITE_ORCHESTRATOR_API_KEY)'],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2 bg-black border border-zinc-800 rounded-md px-3 py-2">
+                    <code className="text-xs text-zinc-500 shrink-0">{k}=</code>
+                    <code className={`text-xs flex-1 font-mono select-all ${k === 'EPICGLOBAL_API_KEY' && !ORCHESTRATOR_API_KEY ? 'text-amber-400' : 'text-indigo-300'}`}>{v}</code>
+                    <CopyBtn text={`${k}=${v}`} />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-500">
+                You can also deploy from EpiCodeSpaces by providing the repo URL below and clicking Deploy.
+              </p>
+            </div>
+          )}
 
-      {/* ── server bootstrap ── */}
-      <Collapsible
-        title="Server Bootstrap Script"
-        icon={<Server size={15} className="text-blue-400" />}
-        accent="border-blue-900/40"
-      >
-        <p className="text-xs text-zinc-500">Run this once on a fresh Ubuntu 22.04 / 24.04 droplet to install all dependencies.</p>
+          {/* Repo URL / file upload */}
+          {source === 'upload' ? (
+            <div className="space-y-2">
+              <label className="text-xs text-zinc-400 font-medium">ZIP or static file *</label>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-zinc-700 hover:border-zinc-500 rounded-xl p-8 flex flex-col items-center gap-2 cursor-pointer transition-colors"
+              >
+                <Upload size={20} className="text-zinc-500" />
+                {uploadFile
+                  ? <p className="text-sm text-zinc-200 font-medium">{uploadFile.name}</p>
+                  : <p className="text-sm text-zinc-500">Click to select or drop a .zip / .tar.gz</p>}
+                <p className="text-xs text-zinc-600">Max 100 MB</p>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip,.tar.gz,.tgz"
+                className="hidden"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setUploadFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="text-xs text-zinc-400 font-medium">
+                {source === 'github' ? 'GitHub repo URL *' : 'Git remote URL *'}
+              </label>
+              <div className="relative">
+                <Github size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
+                <input
+                  type="url"
+                  value={repoUrl}
+                  onChange={e => { setRepoUrl(e.target.value); autoSlug(e.target.value); }}
+                  placeholder="https://github.com/you/my-app.git"
+                  required
+                  className="w-full bg-black border border-zinc-800 rounded-lg pl-9 pr-4 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+                />
+              </div>
+            </div>
+          )}
 
-        <CodeBlock lang="bash" code={`# Node.js 20 LTS via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# PM2 — global process manager
-sudo npm install -g pm2
-
-# Caddy — reverse proxy with auto-TLS
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \\
-  | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \\
-  | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install -y caddy
-
-# Deployment directory
-sudo mkdir -p /var/www/epic-deployments
-sudo chown $USER:$USER /var/www/epic-deployments`} />
-      </Collapsible>
-
-      {/* ── clone & build ── */}
-      <Collapsible
-        title="Clone, Build & Start Orchestrator"
-        icon={<Layers size={15} className="text-emerald-400" />}
-        accent="border-emerald-900/40"
-      >
-        <CodeBlock lang="bash" code={`# Clone the repo
-git clone https://github.com/lifegateportal/EpicGlobal.git ~/epicglobal
-cd ~/epicglobal
-
-# Install server dependencies
-npm install
-
-# Create frontend .env
-cat > .env <<'EOF'
-VITE_SOCKET_URL=https://api.epicglobal.app
-VITE_ORCHESTRATOR_API_KEY=your-api-key-here
-VITE_AUTH_PASSWORD=your-dashboard-password
-EOF
-
-# Build the React dashboard
-npm run build
-
-# Start the orchestrator with PM2
-pm2 start server.js --name epicglobal-api \\
-  --env production \\
-  -- --port 4000
-pm2 save
-pm2 startup`} />
-      </Collapsible>
-
-      {/* ── caddy config ── */}
-      <Collapsible
-        title="Caddy Configuration"
-        icon={<Globe size={15} className="text-cyan-400" />}
-        accent="border-cyan-900/40"
-      >
-        <p className="text-xs text-zinc-500 mb-1">Place this in <code className="bg-zinc-900 px-1 rounded">/etc/caddy/Caddyfile</code>, then reload Caddy.</p>
-
-        <CodeBlock lang="Caddyfile" code={`# Main dashboard
-epicglobal.app {
-  root * /root/epicglobal/dist
-  file_server
-  try_files {path} /index.html
-}
-
-# Orchestrator API + Socket.IO
-api.epicglobal.app {
-  reverse_proxy localhost:4000
-}
-
-# Wildcard subdomains → PM2-managed apps
-*.epicglobal.app {
-  reverse_proxy localhost:{env.SUBDOMAIN_PORT}
-}
-# Note: each deployed app gets its own Caddy block added dynamically
-# by the Orchestrator via caddy adapt / API reload.`} />
-
-        <CodeBlock lang="bash" code={`# Reload Caddy after editing Caddyfile
-sudo systemctl reload caddy
-
-# Check Caddy status
-sudo systemctl status caddy
-
-# Test config syntax
-caddy validate --config /etc/caddy/Caddyfile`} />
-      </Collapsible>
-
-      {/* ── DNS setup ── */}
-      <Collapsible
-        title="DNS Configuration"
-        icon={<Globe size={15} className="text-violet-400" />}
-        accent="border-violet-900/40"
-      >
-        <p className="text-xs text-zinc-500">Add these DNS records in your domain registrar or Cloudflare dashboard.</p>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-zinc-800 text-zinc-500">
-                <th className="text-left py-2 pr-4 font-semibold">Type</th>
-                <th className="text-left py-2 pr-4 font-semibold">Name</th>
-                <th className="text-left py-2 pr-4 font-semibold">Value</th>
-                <th className="text-left py-2 font-semibold">TTL</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-900">
-              <tr className="text-zinc-300">
-                <td className="py-2.5 pr-4">A</td>
-                <td className="py-2.5 pr-4 font-mono">epicglobal.app</td>
-                <td className="py-2.5 pr-4 font-mono text-indigo-300">YOUR_DROPLET_IP</td>
-                <td className="py-2.5">Auto</td>
-              </tr>
-              <tr className="text-zinc-300">
-                <td className="py-2.5 pr-4">A</td>
-                <td className="py-2.5 pr-4 font-mono">api</td>
-                <td className="py-2.5 pr-4 font-mono text-indigo-300">YOUR_DROPLET_IP</td>
-                <td className="py-2.5">Auto</td>
-              </tr>
-              <tr className="text-zinc-300">
-                <td className="py-2.5 pr-4">A</td>
-                <td className="py-2.5 pr-4 font-mono">*</td>
-                <td className="py-2.5 pr-4 font-mono text-indigo-300">YOUR_DROPLET_IP</td>
-                <td className="py-2.5">Auto</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div className="bg-amber-950/20 border border-amber-800/30 rounded-lg p-3">
-          <p className="text-xs text-amber-400/90 flex items-start gap-2">
-            <AlertCircle size={13} className="mt-0.5 shrink-0" />
-            Wildcard TLS with Caddy requires DNS challenge (e.g. Cloudflare API token). Set <code className="bg-black/40 px-1 rounded">CLOUDFLARE_API_TOKEN</code> in your environment if using Cloudflare.
-          </p>
-        </div>
-      </Collapsible>
-
-      {/* ── useful commands ── */}
-      <Collapsible
-        title="Useful Server Commands"
-        icon={<Terminal size={15} className="text-zinc-400" />}
-      >
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div>
-            <p className="text-xs text-zinc-500 mb-2 font-semibold uppercase tracking-widest">PM2</p>
-            <CodeBlock lang="bash" code={`pm2 list                  # all processes
-pm2 logs epicglobal-api   # live log tail
-pm2 restart epicglobal-api
-pm2 stop epicglobal-api
-pm2 delete epicglobal-api
-pm2 monit                 # resource monitor`} />
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500 mb-2 font-semibold uppercase tracking-widest">Orchestrator API</p>
-            <CodeBlock lang="bash" code={`# Health check
-curl https://api.epicglobal.app/api/orchestrator/status
-
-# Deploy a project
-curl -X POST https://api.epicglobal.app/api/orchestrator/deploy \\
-  -H "x-api-key: YOUR_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"projectName":"my-app","repoUrl":"https://github.com/you/repo.git","domain":"my-app.epicglobal.app"}'`} />
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500 mb-2 font-semibold uppercase tracking-widest">Caddy</p>
-            <CodeBlock lang="bash" code={`sudo systemctl status caddy
-sudo systemctl reload caddy
-sudo journalctl -u caddy -f   # live Caddy logs`} />
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500 mb-2 font-semibold uppercase tracking-widest">System</p>
-            <CodeBlock lang="bash" code={`# Disk usage
-df -h /var/www/epic-deployments
-
-# Port listeners
-sudo ss -tlnp | grep -E '4000|80|443'
-
-# Rebuild dashboard after .env changes
-cd ~/epicglobal && npm run build`} />
-          </div>
-        </div>
-      </Collapsible>
-
-      {/* ── security checklist ── */}
-      <Collapsible
-        title="Security Checklist"
-        icon={<ShieldCheck size={15} className="text-rose-400" />}
-        accent="border-rose-900/40"
-      >
-        {[
-          { done: Boolean(ORCHESTRATOR_API_KEY), label: 'VITE_ORCHESTRATOR_API_KEY is set', detail: 'Required to protect all /api/orchestrator endpoints.' },
-          { done: Boolean(import.meta.env.VITE_AUTH_PASSWORD), label: 'Custom dashboard password is set', detail: 'Default password "epicglobal" is public. Change it.' },
-          { done: BASE_URL.startsWith('https://'), label: 'API URL uses HTTPS', detail: 'All traffic should be encrypted end-to-end via Caddy TLS.' },
-          { done: null, label: 'SSH password auth disabled on droplet', detail: 'Use SSH keys only. Edit /etc/ssh/sshd_config → PasswordAuthentication no' },
-          { done: null, label: 'UFW firewall: only ports 22, 80, 443 open', detail: 'sudo ufw allow OpenSSH && sudo ufw allow "Caddy Full" && sudo ufw enable' },
-        ].map((item, i) => (
-          <div key={i} className={`flex items-start gap-3 p-3 rounded-lg border ${item.done === true ? 'border-green-900/30 bg-green-950/10' : item.done === false ? 'border-red-900/30 bg-red-950/10' : 'border-zinc-800'}`}>
-            {item.done === true && <CheckCircle2 size={14} className="text-green-400 shrink-0 mt-0.5" />}
-            {item.done === false && <XCircle size={14} className="text-red-400 shrink-0 mt-0.5" />}
-            {item.done === null && <AlertCircle size={14} className="text-zinc-500 shrink-0 mt-0.5" />}
-            <div>
-              <p className="text-xs font-medium text-zinc-200">{item.label}</p>
-              <p className="text-xs text-zinc-600 mt-0.5">{item.detail}</p>
+          {/* Two-column: Project name + Domain */}
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-xs text-zinc-400 font-medium">Project name *</label>
+              <input
+                type="text"
+                value={projectName}
+                onChange={e => { setProjectName(slugify(e.target.value)); autoDomain(slugify(e.target.value)); }}
+                placeholder="my-app"
+                required
+                className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors font-mono"
+              />
+              <p className="text-xs text-zinc-600">Lowercase, hyphens only. Used as PM2 process name.</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs text-zinc-400 font-medium flex items-center gap-1.5">
+                <Globe size={12} /> Subdomain
+              </label>
+              <input
+                type="text"
+                value={domain}
+                onChange={e => setDomain(e.target.value)}
+                placeholder={`${projectName || 'my-app'}.epicglobal.app`}
+                className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+              />
+              <p className="text-xs text-zinc-600">Leave blank to auto-generate from project name.</p>
             </div>
           </div>
-        ))}
-      </Collapsible>
 
-      {/* ── quick links ── */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-zinc-100 mb-4 flex items-center gap-2">
-          <Zap size={14} className="text-yellow-400" /> Quick Links
-        </h3>
-        <div className="flex flex-wrap gap-3">
-          {[
-            { label: 'DigitalOcean Console', href: 'https://cloud.digitalocean.com/' },
-            { label: 'Cloudflare DNS', href: 'https://dash.cloudflare.com/' },
-            { label: 'Caddy Docs', href: 'https://caddyserver.com/docs/' },
-            { label: 'PM2 Docs', href: 'https://pm2.keymetrics.io/docs/usage/quick-start/' },
-            { label: 'GitHub Repo', href: 'https://github.com/lifegateportal/EpicGlobal' },
-          ].map(link => (
-            <a
-              key={link.href}
-              href={link.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-600 rounded-md px-3 py-1.5 transition-colors"
+          {/* Access token (GitHub / custom git only) */}
+          {(source === 'github' || source === 'git') && (
+            <div className="space-y-2">
+              <label className="text-xs text-zinc-400 font-medium flex items-center gap-1.5">
+                <KeyRound size={12} /> Access token <span className="text-zinc-600">(optional — private repos)</span>
+              </label>
+              <input
+                type="password"
+                value={accessToken}
+                onChange={e => setAccessToken(e.target.value)}
+                placeholder="ghp_••••••••••••••••"
+                className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors font-mono"
+              />
+              <p className="text-xs text-zinc-600">Never stored. Used only for this clone operation.</p>
+            </div>
+          )}
+
+          {/* Environment variables */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-zinc-400 font-medium flex items-center gap-1.5">
+                <Zap size={12} /> Environment variables <span className="text-zinc-600">(optional)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setEnvRows(r => [...r, newEnvRow()])}
+                className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-600 rounded-md px-2.5 py-1 transition-colors"
+              >
+                <Plus size={11} /> Add var
+              </button>
+            </div>
+            {envRows.length > 0 && (
+              <div className="space-y-2">
+                {envRows.map(row => (
+                  <div key={row.id} className="flex gap-2">
+                    <input
+                      type="text"
+                      value={row.key}
+                      onChange={e => updateEnvRow(row.id, { key: e.target.value.replace(/\s/g, '_').toUpperCase() })}
+                      placeholder="KEY"
+                      className="w-40 bg-black border border-zinc-800 rounded-md px-3 py-2 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+                    />
+                    <input
+                      type="text"
+                      value={row.value}
+                      onChange={e => updateEnvRow(row.id, { value: e.target.value })}
+                      placeholder="value"
+                      className="flex-1 bg-black border border-zinc-800 rounded-md px-3 py-2 text-xs text-zinc-200 font-mono placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeEnvRow(row.id)}
+                      className="text-zinc-600 hover:text-red-400 transition-colors p-2"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* nav */}
+          <div className="flex items-center justify-between pt-2">
+            <button type="button" onClick={() => setStep(1)} className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-100 transition-colors">
+              <ArrowLeft size={14} /> Back
+            </button>
+            <button
+              type="submit"
+              disabled={!canProceedStep2}
+              className="flex items-center gap-2 px-5 py-2.5 bg-white text-black text-sm font-medium rounded-lg disabled:opacity-30 hover:bg-zinc-200 transition-colors"
             >
-              {link.label}
-              <ExternalLink size={11} className="text-zinc-600" />
-            </a>
-          ))}
+              Review & Deploy <ArrowRight size={15} />
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* ═══ STEP 3 — review + deploy ═════════════════════════════ */}
+      {step === 3 && (
+        <div className="space-y-5">
+          <p className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">3 — Review & Deploy</p>
+
+          {/* summary card */}
+          {deployState.phase !== 'success' && (
+            <div className="border border-zinc-800 bg-[#0A0A0A] rounded-xl divide-y divide-zinc-800/60">
+              {[
+                { label: 'Source', value: SOURCES.find(s => s.id === source)?.label },
+                source !== 'upload' && { label: 'Repo URL', value: repoUrl },
+                source === 'upload' && uploadFile && { label: 'File', value: uploadFile.name },
+                { label: 'Project name', value: slugify(projectName) || '—', mono: true },
+                { label: 'Domain', value: domain || `${slugify(projectName)}.epicglobal.app`, mono: true },
+                envRows.filter(r => r.key).length > 0 && { label: 'Env vars', value: `${envRows.filter(r => r.key).length} variable(s)` },
+                accessToken && { label: 'Access token', value: '••••••••' },
+              ].filter(Boolean).map((row: { label: string; value?: string; mono?: boolean } | false, i) => row && (
+                <div key={i} className="flex items-center gap-4 px-5 py-3">
+                  <span className="text-xs text-zinc-500 w-28 shrink-0">{row.label}</span>
+                  <span className={`text-sm text-zinc-200 ${row.mono ? 'font-mono' : ''} truncate`}>{row.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* deploy / result area */}
+          {deployState.phase === 'idle' && (
+            <form onSubmit={handleDeploy}>
+              <div className="flex items-center justify-between gap-4">
+                <button type="button" onClick={() => setStep(2)} className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-100 transition-colors">
+                  <ArrowLeft size={14} /> Edit
+                </button>
+                <button
+                  type="submit"
+                  className="flex items-center gap-2 px-6 py-3 bg-white text-black text-sm font-semibold rounded-lg hover:bg-zinc-200 transition-colors shadow-lg shadow-white/10"
+                >
+                  <Zap size={15} /> Deploy to EpicGlobal
+                </button>
+              </div>
+            </form>
+          )}
+
+          {deployState.phase === 'deploying' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 p-4 border border-blue-800/40 bg-blue-950/10 rounded-xl">
+                <Loader2 size={16} className="text-blue-400 animate-spin shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-zinc-100">Deploying {projectName}…</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">Cloning, building, and starting your project under PM2.</p>
+                </div>
+              </div>
+              {logLines && (
+                <pre ref={logRef} className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-xs text-zinc-400 font-mono h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  {logLines}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {deployState.phase === 'success' && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-4 p-5 border border-green-800/40 bg-green-950/10 rounded-xl">
+                <CheckCircle2 size={22} className="text-green-400 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-zinc-100 mb-1">🎉 {projectName} is live!</p>
+                  <a
+                    href={deployState.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-sm text-indigo-300 hover:text-indigo-200 font-mono break-all"
+                  >
+                    {deployState.url} <ExternalLink size={12} className="shrink-0" />
+                  </a>
+                </div>
+                <CopyBtn text={deployState.url} />
+              </div>
+
+              {deployState.log && (
+                <details className="group">
+                  <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-300 flex items-center gap-1.5 select-none">
+                    <ChevronRight size={12} className="group-open:rotate-90 transition-transform" /> Show deploy log
+                  </summary>
+                  <pre className="mt-2 bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-xs text-zinc-400 font-mono max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                    {deployState.log}
+                  </pre>
+                </details>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={reset}
+                  className="flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-600 rounded-lg px-4 py-2.5 transition-colors"
+                >
+                  <RefreshCw size={13} /> Deploy another project
+                </button>
+              </div>
+            </div>
+          )}
+
+          {deployState.phase === 'error' && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-3 p-4 border border-red-800/40 bg-red-950/10 rounded-xl">
+                <XCircle size={16} className="text-red-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-zinc-100">Deployment failed</p>
+                  <p className="text-xs text-zinc-400 mt-1">{deployState.message}</p>
+                </div>
+              </div>
+              {deployState.log && (
+                <pre className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-xs text-red-400/80 font-mono max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  {deployState.log}
+                </pre>
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => { setDeployState({ phase: 'idle' }); setLogLines(''); }}
+                  className="flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-600 rounded-lg px-4 py-2.5 transition-colors"
+                >
+                  <RefreshCw size={13} /> Try again
+                </button>
+                <button onClick={() => setStep(2)} className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                  ← Edit config
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── EpiCodeSpaces quick-connect reference (always visible) ── */}
+      <div className="border border-indigo-900/40 bg-[#0A0A0A] rounded-xl overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between p-5 hover:bg-zinc-900/20 transition-colors"
+          onClick={e => { const d = (e.currentTarget.nextElementSibling as HTMLElement); d.style.display = d.style.display === 'none' ? 'block' : 'none'; }}
+        >
+          <div className="flex items-center gap-2.5">
+            <Link2 size={14} className="text-indigo-400" />
+            <span className="text-sm font-medium text-zinc-100">EpiCodeSpaces API credentials</span>
+            <span className="text-xs text-zinc-600 hidden sm:inline">— use these in your IDE to deploy directly</span>
+          </div>
+          <ChevronRight size={14} className="text-zinc-600" />
+        </button>
+        <div style={{ display: 'none' }} className="border-t border-indigo-900/30">
+          <div className="p-5 space-y-3">
+            {[
+              { label: 'API URL', value: API, color: 'text-indigo-300' },
+              { label: 'API Key', value: ORCHESTRATOR_API_KEY || '(set VITE_ORCHESTRATOR_API_KEY)', color: ORCHESTRATOR_API_KEY ? 'text-emerald-300' : 'text-amber-400' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="space-y-1">
+                <p className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">{label}</p>
+                <div className="flex items-center gap-2 bg-black border border-zinc-800 rounded-md px-3 py-2.5">
+                  <code className={`text-sm flex-1 font-mono select-all ${color}`}>{value}</code>
+                  {value && <CopyBtn text={value} />}
+                </div>
+              </div>
+            ))}
+            <p className="text-xs text-zinc-600 pt-1 border-t border-zinc-800/60">
+              <code className="bg-zinc-900 px-1 rounded">POST {API}/api/orchestrator/deploy</code> · header: <code className="bg-zinc-900 px-1 rounded">x-api-key</code>
+            </p>
+          </div>
         </div>
       </div>
     </div>
