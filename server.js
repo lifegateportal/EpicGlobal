@@ -912,11 +912,8 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
           .on('error', reject);
       });
     } else {
-      // Single file — always save as index.html so Caddy serves it at root
-      const saveName = (filename.endsWith('.html') || filename.endsWith('.htm'))
-        ? 'index.html'
-        : req.file.originalname;
-      const writePath = path.join(projectDir, saveName);
+      // Always save as index.html — Caddy needs index.html at root regardless of upload filename
+      const writePath = path.join(projectDir, 'index.html');
       fs.writeFileSync(writePath, req.file.buffer);
       // Verify write succeeded and is non-empty
       const written = fs.statSync(writePath);
