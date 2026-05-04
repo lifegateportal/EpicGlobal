@@ -40,6 +40,7 @@ export default function ProjectOrchestrator() {
   const [renamingFile, setRenamingFile] = useState<{ project: string; file: string } | null>(null);
   const [renameFileValue, setRenameFileValue] = useState('');
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
+  const [expandedHistoryLogId, setExpandedHistoryLogId] = useState<number | null>(null);
   const [historyFilter, setHistoryFilter] = useState<string>('');
   const [watchdog, setWatchdog] = useState<Record<string, WatchdogEntry>>({});
   const [alertConfig, setAlertConfig] = useState<AlertConfig | null>(null);
@@ -344,7 +345,8 @@ export default function ProjectOrchestrator() {
         fetchHistory();
         fetchQueue();
       } else {
-        setDeployStatus({ loading: false, logs: '', error: data.error || 'Deployment failed.' });
+        const failLog = String(data.terminalOutput || data.log || data.error || '').trim();
+        setDeployStatus({ loading: false, logs: failLog, error: data.error || 'Deployment failed.' });
         toast.error(data.error || 'Deployment failed.');
         fetchQueue();
       }
@@ -395,7 +397,8 @@ export default function ProjectOrchestrator() {
         fetchStatus();
         fetchHistory();
       } else {
-        setDeployStatus({ loading: false, logs: '', error: data.error });
+        const failLog = String(data.terminalOutput || data.log || data.error || '').trim();
+        setDeployStatus({ loading: false, logs: failLog, error: data.error || 'Rollback failed.' });
         toast.error('Rollback failed.');
       }
     } catch {
@@ -618,7 +621,7 @@ export default function ProjectOrchestrator() {
               )}
               <div className="bg-black border border-zinc-800 rounded-lg p-4 h-40 overflow-y-auto font-mono text-xs">
                 {deployStatus.error && <p className="text-red-400">Error: {deployStatus.error}</p>}
-                {deployStatus.logs && <pre className="text-emerald-400 whitespace-pre-wrap">{deployStatus.logs}</pre>}
+                  {deployStatus.logs && <pre className={"whitespace-pre-wrap " + (deployStatus.error ? 'text-amber-300' : 'text-emerald-400')}>{deployStatus.logs}</pre>}
               </div>
             </div>
           )}
@@ -917,7 +920,6 @@ export default function ProjectOrchestrator() {
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-0.5">
-                        {/* Rename inline editor for static projects */}
                         {renamingProject === name ? (
                           <form onSubmit={(e) => { e.preventDefault(); handleRename(name); }} className="flex items-center gap-1">
                             <input
@@ -960,7 +962,6 @@ export default function ProjectOrchestrator() {
                     </div>
                   </div>
                   <div className="flex items-center gap-0.5 sm:gap-1 ml-2 shrink-0">
-                    {/* History button for all projects */}
                     <button onClick={() => toggleProjectHistory(name)}
                       className="p-2 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800 rounded-md transition-colors" title="Project history">
                       <Clock size={14} className={expandedHistory === name ? 'text-amber-400' : ''} />
@@ -1012,24 +1013,41 @@ export default function ProjectOrchestrator() {
                 )}
                 {expandedHistory === name && (
                   <div className="px-3 sm:px-4 pb-3 bg-zinc-950 border-t border-zinc-800/60">
-                    <p className="text-xs text-zinc-500 pt-3 mb-2 font-medium">History — <span className="text-zinc-300">{name}</span></p>
+                    <p className="text-xs text-zinc-500 pt-3 mb-2 font-medium">History - <span className="text-zinc-300">{name}</span></p>
                     {(() => {
                       const entries = history.filter(e => e.projectName === name);
                       if (entries.length === 0) return <p className="text-xs text-zinc-600">No history for this project yet.</p>;
                       return (
-                        <ul className="space-y-1 max-h-48 overflow-y-auto">
+                        <ul className="space-y-1 max-h-56 overflow-y-auto">
                           {entries.slice().reverse().map(entry => (
-                            <li key={entry.id} className="flex items-center justify-between gap-3 py-1 border-b border-zinc-800/40 last:border-0">
-                              <div className="flex items-center gap-2 min-w-0">
-                                {entry.status === 'success' && <CheckCircle2 size={12} className="text-green-400 shrink-0" />}
-                                {entry.status === 'failed' && <XCircle size={12} className="text-red-400 shrink-0" />}
-                                {entry.status === 'deleted' && <Trash2 size={12} className="text-zinc-500 shrink-0" />}
-                                <span className="text-xs text-zinc-400 truncate">
-                                  {entry.details?.strategy || entry.status}
-                                  {entry.details?.url ? <span className="text-zinc-600 ml-1">{String(entry.details.url)}</span> : null}
-                                </span>
+                            <li key={entry.id} className="py-1 border-b border-zinc-800/40 last:border-0">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {entry.status === 'success' && <CheckCircle2 size={12} className="text-green-400 shrink-0" />}
+                                  {entry.status === 'failed' && <XCircle size={12} className="text-red-400 shrink-0" />}
+                                  {entry.status === 'deleted' && <Trash2 size={12} className="text-zinc-500 shrink-0" />}
+                                  <span className="text-xs text-zinc-400 truncate">
+                                    {entry.details?.strategy || entry.status}
+                                    {entry.details?.url ? <span className="text-zinc-600 ml-1">{String(entry.details.url)}</span> : null}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {(entry.details?.log || entry.details?.error) && (
+                                    <button
+                                      onClick={() => setExpandedHistoryLogId(expandedHistoryLogId === entry.id ? null : entry.id)}
+                                      className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500"
+                                    >
+                                      {expandedHistoryLogId === entry.id ? 'Hide logs' : 'View logs'}
+                                    </button>
+                                  )}
+                                  <span className="text-[10px] text-zinc-600">{new Date(entry.timestamp).toLocaleString()}</span>
+                                </div>
                               </div>
-                              <span className="text-[10px] text-zinc-600 shrink-0">{new Date(entry.timestamp).toLocaleString()}</span>
+                              {expandedHistoryLogId === entry.id && (
+                                <pre className="mt-2 text-[11px] text-amber-300 whitespace-pre-wrap bg-black border border-zinc-800 rounded p-2 max-h-48 overflow-y-auto">
+                                  {String(entry.details?.log || entry.details?.error || 'No logs recorded.')}
+                                </pre>
+                              )}
                             </li>
                           ))}
                         </ul>

@@ -252,6 +252,13 @@ function appendHistory(projectName, status, details) {
   }
 }
 
+function compactLog(logText, limit = 12000) {
+  const text = String(logText || '').trim();
+  if (!text) return '';
+  if (text.length <= limit) return text;
+  return text.slice(0, limit) + '\n\n...[truncated]';
+}
+
 function buildCaddyConfig(registry) {
   let config = 'api.epicglobal.app {\n  reverse_proxy localhost:4000\n}\n';
   
@@ -480,7 +487,12 @@ async function executeOrchestratorDeploy(payload) {
         buildResult = await buildCandidate(projectName, repoUrl, candidatePort);
       } catch (buildError) {
         const errOut = [buildError.stdout, buildError.stderr, buildError.message].filter(Boolean).join('\n').trim();
-        appendHistory(projectName, 'failed', { error: errOut, repoUrl: repoUrl, strategy: 'blue-green' });
+        appendHistory(projectName, 'failed', {
+          error: errOut,
+          repoUrl: repoUrl,
+          strategy: 'blue-green',
+          log: compactLog(errOut)
+        });
         throw {
           statusCode: 500,
           body: {
@@ -500,7 +512,12 @@ async function executeOrchestratorDeploy(payload) {
       if (!healthy) {
         await rollbackCandidate(buildResult.candidateName, buildResult.candidatePath);
         const errMsg = logPrefix + 'health check FAILED. Old version kept. No downtime.';
-        appendHistory(projectName, 'failed', { error: errMsg, repoUrl: repoUrl, strategy: 'blue-green' });
+        appendHistory(projectName, 'failed', {
+          error: errMsg,
+          repoUrl: repoUrl,
+          strategy: 'blue-green',
+          log: compactLog(output)
+        });
         throw {
           statusCode: 502,
           body: {
@@ -529,7 +546,12 @@ async function executeOrchestratorDeploy(payload) {
         const registry2 = getRegistry();
         delete registry2.projects[projectName];
         saveRegistry(registry2);
-        appendHistory(projectName, 'failed', { error: 'Process started but did not respond on port ' + port + ' after 15 s.', repoUrl, strategy: 'first-deploy' });
+        appendHistory(projectName, 'failed', {
+          error: 'Process started but did not respond on port ' + port + ' after 15 s.',
+          repoUrl,
+          strategy: 'first-deploy',
+          log: compactLog(output)
+        });
         throw {
           statusCode: 502,
           body: {
@@ -561,7 +583,7 @@ async function executeOrchestratorDeploy(payload) {
   } catch (error) {
     if (error.statusCode) throw error;
     const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
-    appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl });
+    appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl, log: compactLog(output) });
     sendAlert('deploy', projectName, 'Deploy FAILED: ' + (output.slice(0, 200) || 'unknown error'), 'error').catch(() => {});
 
     throw {
