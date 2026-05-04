@@ -39,6 +39,8 @@ export default function ProjectOrchestrator() {
   const [projectFiles, setProjectFiles] = useState<Record<string, string[]>>({});
   const [renamingFile, setRenamingFile] = useState<{ project: string; file: string } | null>(null);
   const [renameFileValue, setRenameFileValue] = useState('');
+  const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<string>('');
   const [watchdog, setWatchdog] = useState<Record<string, WatchdogEntry>>({});
   const [alertConfig, setAlertConfig] = useState<AlertConfig | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
@@ -64,6 +66,12 @@ export default function ProjectOrchestrator() {
       const data = await res.json();
       if (data.success) setHistory(Array.isArray(data.history) ? data.history : []);
     } catch {}
+  };
+
+  const toggleProjectHistory = async (name: string) => {
+    if (expandedHistory === name) { setExpandedHistory(null); return; }
+    setExpandedHistory(name);
+    if (history.length === 0) await fetchHistory();
   };
 
   const fetchQueue = async () => {
@@ -952,6 +960,11 @@ export default function ProjectOrchestrator() {
                     </div>
                   </div>
                   <div className="flex items-center gap-0.5 sm:gap-1 ml-2 shrink-0">
+                    {/* History button for all projects */}
+                    <button onClick={() => toggleProjectHistory(name)}
+                      className="p-2 text-zinc-500 hover:text-amber-400 hover:bg-zinc-800 rounded-md transition-colors" title="Project history">
+                      <Clock size={14} className={expandedHistory === name ? 'text-amber-400' : ''} />
+                    </button>
                     {project.deployType === 'static' ? (
                       <>
                         <button
@@ -962,7 +975,7 @@ export default function ProjectOrchestrator() {
                           className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
                           title="Manage files"
                         >
-                          {expandedFiles === name ? <ChevronUp size={14} /> : <FileText size={14} />}
+                          <FileText size={14} className={expandedFiles === name ? 'text-zinc-200' : ''} />
                         </button>
                         <button onClick={() => handleDelete(name)}
                           disabled={actionLoading === 'delete-' + name}
@@ -974,7 +987,7 @@ export default function ProjectOrchestrator() {
                       <>
                         <button onClick={() => handleFetchLogs(name)}
                           className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors" title="View logs">
-                          {expandedLogs === name ? <ChevronUp size={14} /> : <FileText size={14} />}
+                          <FileText size={14} className={expandedLogs === name ? 'text-zinc-200' : ''} />
                         </button>
                         <button onClick={() => handleRollback(name, project.repoUrl)}
                           disabled={actionLoading === 'rollback-' + name}
@@ -995,6 +1008,33 @@ export default function ProjectOrchestrator() {
                     <pre className="text-xs text-zinc-400 font-mono whitespace-pre-wrap h-48 overflow-y-auto p-3 border border-zinc-800 rounded-md">
                       {projectLogs[name] || 'Fetching logs...'}
                     </pre>
+                  </div>
+                )}
+                {expandedHistory === name && (
+                  <div className="px-3 sm:px-4 pb-3 bg-zinc-950 border-t border-zinc-800/60">
+                    <p className="text-xs text-zinc-500 pt-3 mb-2 font-medium">History — <span className="text-zinc-300">{name}</span></p>
+                    {(() => {
+                      const entries = history.filter(e => e.projectName === name);
+                      if (entries.length === 0) return <p className="text-xs text-zinc-600">No history for this project yet.</p>;
+                      return (
+                        <ul className="space-y-1 max-h-48 overflow-y-auto">
+                          {entries.slice().reverse().map(entry => (
+                            <li key={entry.id} className="flex items-center justify-between gap-3 py-1 border-b border-zinc-800/40 last:border-0">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {entry.status === 'success' && <CheckCircle2 size={12} className="text-green-400 shrink-0" />}
+                                {entry.status === 'failed' && <XCircle size={12} className="text-red-400 shrink-0" />}
+                                {entry.status === 'deleted' && <Trash2 size={12} className="text-zinc-500 shrink-0" />}
+                                <span className="text-xs text-zinc-400 truncate">
+                                  {entry.details?.strategy || entry.status}
+                                  {entry.details?.url ? <span className="text-zinc-600 ml-1">{String(entry.details.url)}</span> : null}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-zinc-600 shrink-0">{new Date(entry.timestamp).toLocaleString()}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      );
+                    })()}
                   </div>
                 )}
                 {expandedFiles === name && (
@@ -1046,32 +1086,51 @@ export default function ProjectOrchestrator() {
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
         <button onClick={() => { setShowHistory(!showHistory); if (!showHistory) fetchHistory(); }}
           className="w-full p-5 flex items-center justify-between bg-zinc-900/20 hover:bg-zinc-900/40 transition-colors">
-          <h2 className="text-sm font-semibold text-zinc-100">Deployment History <span className="text-zinc-600 font-normal ml-1">({history.length})</span></h2>
+          <h2 className="text-sm font-semibold text-zinc-100">All Deployment History <span className="text-zinc-600 font-normal ml-1">({history.length})</span></h2>
           {showHistory ? <ChevronUp size={14} className="text-zinc-500" /> : <ChevronDown size={14} className="text-zinc-500" />}
         </button>
 
         {showHistory && (
-          <div className="divide-y divide-zinc-800/60 max-h-80 overflow-y-auto">
-            {history.length === 0 ? (
-              <div className="p-6 text-center text-zinc-600 text-sm">No history yet.</div>
-            ) : history.map((entry) => (
-              <div key={entry.id} className="p-3 px-5 flex items-center justify-between hover:bg-zinc-900/20">
-                <div className="flex items-center gap-3">
-                  {entry.status === 'success' && <CheckCircle2 size={14} className="text-green-400 shrink-0" />}
-                  {entry.status === 'failed' && <XCircle size={14} className="text-red-400 shrink-0" />}
-                  {entry.status === 'deleted' && <Trash2 size={14} className="text-zinc-500 shrink-0" />}
-                  <div>
-                    <span className="text-sm text-zinc-300 font-medium">{entry.projectName || 'unknown-project'}</span>
-                    {entry.details.strategy === 'blue-green' && (
-                      <span className="ml-2 text-xs bg-blue-950 text-blue-400 border border-blue-800 rounded px-1.5 py-0.5">blue-green</span>
-                    )}
-                    {entry.details.url && <span className="ml-2 text-xs text-zinc-600">{String(entry.details.url)}</span>}
+          <>
+            {/* Project filter */}
+            <div className="px-5 pt-3 pb-2 border-b border-zinc-800/60 flex items-center gap-2">
+              <label className="text-xs text-zinc-500 shrink-0">Filter by project:</label>
+              <select
+                value={historyFilter}
+                onChange={(e) => setHistoryFilter(e.target.value)}
+                className="flex-1 bg-black border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-zinc-500"
+              >
+                <option value="">All projects</option>
+                {Array.from(new Set(history.map(e => e.projectName))).sort().map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              {historyFilter && <button onClick={() => setHistoryFilter('')} className="text-zinc-600 hover:text-zinc-400"><X size={13} /></button>}
+            </div>
+            <div className="divide-y divide-zinc-800/60 max-h-80 overflow-y-auto">
+              {(() => {
+                const filtered = historyFilter ? history.filter(e => e.projectName === historyFilter) : history;
+                if (filtered.length === 0) return <div className="p-6 text-center text-zinc-600 text-sm">No history yet.</div>;
+                return filtered.slice().reverse().map((entry) => (
+                  <div key={entry.id} className="p-3 px-5 flex items-center justify-between hover:bg-zinc-900/20">
+                    <div className="flex items-center gap-3">
+                      {entry.status === 'success' && <CheckCircle2 size={14} className="text-green-400 shrink-0" />}
+                      {entry.status === 'failed' && <XCircle size={14} className="text-red-400 shrink-0" />}
+                      {entry.status === 'deleted' && <Trash2 size={14} className="text-zinc-500 shrink-0" />}
+                      <div>
+                        <span className="text-sm text-zinc-300 font-medium">{entry.projectName || 'unknown-project'}</span>
+                        {entry.details?.strategy && (
+                          <span className="ml-2 text-xs bg-zinc-900 text-zinc-400 border border-zinc-700 rounded px-1.5 py-0.5">{String(entry.details.strategy)}</span>
+                        )}
+                        {entry.details?.url && <span className="ml-2 text-xs text-zinc-600">{String(entry.details.url)}</span>}
+                      </div>
+                    </div>
+                    <span className="text-xs text-zinc-600 shrink-0 ml-4">{new Date(entry.timestamp).toLocaleString()}</span>
                   </div>
-                </div>
-                <span className="text-xs text-zinc-600 shrink-0 ml-4">{new Date(entry.timestamp).toLocaleString()}</span>
-              </div>
-            ))}
-          </div>
+                ));
+              })()}
+            </div>
+          </>
         )}
       </div>
     </div>
