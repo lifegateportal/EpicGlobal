@@ -9,10 +9,12 @@ export type ProjectHealth = {
 };
 
 export type Project = {
-  port: number;
+  port: number | null;
   repoUrl: string;
   domain?: string;
   health: ProjectHealth;
+  deployType?: 'static' | 'git';
+  staticDir?: string;
 };
 
 export type HistoryEntry = {

@@ -963,6 +963,50 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
 });
 
 // ---------------------------------------------------------
+// API: List Files in Static Project
+// ---------------------------------------------------------
+app.get('/api/orchestrator/files/:name', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const dir = path.join(DEPLOY_ROOT, name);
+    if (!fs.existsSync(dir)) return res.status(404).json({ success: false, error: 'Project dir not found.' });
+    const files = fs.readdirSync(dir).filter(f => {
+      try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; }
+    });
+    res.json({ success: true, files });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Rename File Inside Static Project
+// ---------------------------------------------------------
+app.post('/api/orchestrator/rename-file', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.body?.projectName);
+    const oldFile = req.body?.oldFile;
+    const newFile = req.body?.newFile;
+    if (!name || !oldFile || !newFile) {
+      return res.status(400).json({ success: false, error: 'projectName, oldFile, and newFile are required.' });
+    }
+    // Prevent path traversal
+    if (oldFile.includes('/') || oldFile.includes('..') || newFile.includes('/') || newFile.includes('..')) {
+      return res.status(400).json({ success: false, error: 'Invalid file name.' });
+    }
+    const dir = path.join(DEPLOY_ROOT, name);
+    const oldPath = path.join(dir, oldFile);
+    const newPath = path.join(dir, newFile);
+    if (!fs.existsSync(oldPath)) return res.status(404).json({ success: false, error: 'File not found.' });
+    if (fs.existsSync(newPath)) return res.status(409).json({ success: false, error: 'A file named "' + newFile + '" already exists.' });
+    fs.renameSync(oldPath, newPath);
+    res.json({ success: true, newFile });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ---------------------------------------------------------
 // API: Rename Static Project
 // ---------------------------------------------------------
 app.post('/api/orchestrator/rename', async (req, res) => {

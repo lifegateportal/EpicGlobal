@@ -35,6 +35,10 @@ export default function ProjectOrchestrator() {
   const [backups, setBackups] = useState<BackupManifest[]>([]);
   const [renamingProject, setRenamingProject] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [expandedFiles, setExpandedFiles] = useState<string | null>(null);
+  const [projectFiles, setProjectFiles] = useState<Record<string, string[]>>({});
+  const [renamingFile, setRenamingFile] = useState<{ project: string; file: string } | null>(null);
+  const [renameFileValue, setRenameFileValue] = useState('');
   const [watchdog, setWatchdog] = useState<Record<string, WatchdogEntry>>({});
   const [alertConfig, setAlertConfig] = useState<AlertConfig | null>(null);
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
@@ -394,29 +398,34 @@ export default function ProjectOrchestrator() {
     }
   };
 
-  const handleRename = async (oldName: string) => {
-    const newName = renameValue.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-    if (!newName || newName === oldName) { setRenamingProject(null); return; }
-    setActionLoading('rename-' + oldName);
+  const handleFetchFiles = async (name: string) => {
     try {
-      const res = await fetch(API + '/api/orchestrator/rename', {
+      const res = await fetch(API + '/api/orchestrator/files/' + name);
+      const data = await res.json();
+      if (data.success) setProjectFiles(prev => ({ ...prev, [name]: data.files }));
+    } catch { /* ignore */ }
+  };
+
+  const handleRenameFile = async (projectName: string, oldFile: string) => {
+    const newFile = renameFileValue.trim();
+    if (!newFile || newFile === oldFile) { setRenamingFile(null); return; }
+    setActionLoading('rename-file-' + projectName);
+    try {
+      const res = await fetch(API + '/api/orchestrator/rename-file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldName, newName }),
+        body: JSON.stringify({ projectName, oldFile, newFile }),
       });
       const data = await res.json();
       if (data.success) {
-        toast.success('Renamed to ' + data.newName + '.');
-        setRenamingProject(null);
-        fetchStatus();
+        toast.success(`Renamed to ${newFile}`);
+        setRenamingFile(null);
+        handleFetchFiles(projectName);
       } else {
         toast.error(data.error || 'Rename failed.');
       }
-    } catch {
-      toast.error('Could not reach API.');
-    } finally {
-      setActionLoading(null);
-    }
+    } catch { toast.error('Could not reach API.'); }
+    finally { setActionLoading(null); }
   };
 
   const handleRename = async (oldName: string) => {
@@ -946,11 +955,14 @@ export default function ProjectOrchestrator() {
                     {project.deployType === 'static' ? (
                       <>
                         <button
-                          onClick={() => { setRenamingProject(name); setRenameValue(name); }}
+                          onClick={() => {
+                            if (expandedFiles === name) { setExpandedFiles(null); }
+                            else { setExpandedFiles(name); handleFetchFiles(name); }
+                          }}
                           className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
-                          title="Rename project"
+                          title="Manage files"
                         >
-                          <Pencil size={14} />
+                          {expandedFiles === name ? <ChevronUp size={14} /> : <FileText size={14} />}
                         </button>
                         <button onClick={() => handleDelete(name)}
                           disabled={actionLoading === 'delete-' + name}
@@ -983,6 +995,45 @@ export default function ProjectOrchestrator() {
                     <pre className="text-xs text-zinc-400 font-mono whitespace-pre-wrap h-48 overflow-y-auto p-3 border border-zinc-800 rounded-md">
                       {projectLogs[name] || 'Fetching logs...'}
                     </pre>
+                  </div>
+                )}
+                {expandedFiles === name && (
+                  <div className="px-3 sm:px-4 pb-3 bg-zinc-950 border-t border-zinc-800/60">
+                    <p className="text-xs text-zinc-500 mb-2 pt-3">Files in <span className="text-zinc-300 font-mono">/var/www/epic-deployments/{name}/</span></p>
+                    {(projectFiles[name] ?? []).length === 0 ? (
+                      <p className="text-xs text-zinc-600">No files found.</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {(projectFiles[name] ?? []).map(file => (
+                          <li key={file} className="flex items-center gap-2 text-xs font-mono">
+                            {renamingFile?.project === name && renamingFile?.file === file ? (
+                              <form onSubmit={(e) => { e.preventDefault(); handleRenameFile(name, file); }} className="flex items-center gap-1 flex-1">
+                                <input
+                                  autoFocus
+                                  value={renameFileValue}
+                                  onChange={(e) => setRenameFileValue(e.target.value)}
+                                  className="bg-black border border-zinc-600 rounded px-2 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-white flex-1 min-w-0"
+                                  onKeyDown={(e) => e.key === 'Escape' && setRenamingFile(null)}
+                                />
+                                <button type="submit" disabled={actionLoading === 'rename-file-' + name} className="p-1 text-green-400 hover:text-green-300"><Check size={12} /></button>
+                                <button type="button" onClick={() => setRenamingFile(null)} className="p-1 text-zinc-500 hover:text-zinc-300"><X size={12} /></button>
+                              </form>
+                            ) : (
+                              <>
+                                <span className={`flex-1 truncate ${file === 'index.html' ? 'text-green-400' : 'text-amber-400'}`}>{file}</span>
+                                <button
+                                  onClick={() => { setRenamingFile({ project: name, file }); setRenameFileValue(file); }}
+                                  className="p-1 text-zinc-600 hover:text-zinc-300"
+                                  title="Rename file"
+                                >
+                                  <Pencil size={11} />
+                                </button>
+                              </>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
               </div>
