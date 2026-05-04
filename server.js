@@ -265,7 +265,8 @@ function buildCaddyConfig(registry) {
       // Serve static files directly via Caddy (no PM2 process needed)
       const serveDir = data.staticDir || path.join(DEPLOY_ROOT, name);
       hosts.forEach((host) => {
-        config += '\n' + host + ' {\n  root * ' + serveDir + '\n  file_server\n  try_files {path} /index.html\n}\n';
+        // try_files MUST be before file_server in Caddy v2
+        config += '\n' + host + ' {\n  root * ' + serveDir + '\n  try_files {path} /index.html\n  file_server\n}\n';
       });
     } else {
       hosts.forEach((host) => {
@@ -911,8 +912,11 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
           .on('error', reject);
       });
     } else {
-      // Single file (html, css, js, etc.)
-      fs.writeFileSync(path.join(projectDir, req.file.originalname), req.file.buffer);
+      // Single file — always save as index.html so Caddy serves it at root
+      const saveName = (filename.endsWith('.html') || filename.endsWith('.htm'))
+        ? 'index.html'
+        : req.file.originalname;
+      fs.writeFileSync(path.join(projectDir, saveName), req.file.buffer);
     }
 
     // If zip extracted a single root folder, serve from inside it
