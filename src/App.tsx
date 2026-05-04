@@ -5,6 +5,7 @@ import { Navbar } from './components/Navbar';
 import { OverviewTab } from './components/OverviewTab';
 import { DeploymentsTab } from './components/DeploymentsTab';
 import { SettingsTab } from './components/SettingsTab';
+import { SetupTab } from './components/SetupTab';
 import { CommandTerminal } from './components/CommandTerminal';
 import { CommandPalette } from './components/CommandPalette';
 import { KeyboardHUD } from './components/KeyboardHUD';
@@ -58,6 +59,7 @@ export default function App() {
       if (e.key === '3') handleTabSwitch('edge');
       if (e.key === '4') handleTabSwitch('orchestrator');
       if (e.key === '5') handleTabSwitch('settings');
+      if (e.key === '6') handleTabSwitch('setup');
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -114,7 +116,8 @@ export default function App() {
     { id: 'deployments', label: 'Deployments' },
     { id: 'edge', label: 'Edge' },
     { id: 'orchestrator', label: 'Backend Orchestrator' },
-    { id: 'settings', label: 'Settings' }
+    { id: 'settings', label: 'Settings' },
+    { id: 'setup', label: 'Setup' }
   ];
 
   return (
@@ -187,6 +190,7 @@ export default function App() {
           {/* Injecting the new God-Mode Engine Panel */}
           {activeTab === 'orchestrator' && <BackendManager />}
           {activeTab === 'settings' && <SettingsTab />}
+          {activeTab === 'setup' && <SetupTab />}
         </div>
       </main>
     </div>
