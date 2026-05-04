@@ -1755,13 +1755,27 @@ setInterval(async () => {
             io.emit('watchdog_event', { name: name, status: 'healed', message: msg, timestamp: now });
           } catch (restartError) {
             const errMsg = 'Auto-heal FAILED for ' + name + ': ' + restartError.message;
-            console.error('[watchdog]', errMsg);
-            watchdogState[name] = Object.assign({}, watchdogState[name], {
-              status: 'down',
-              lastError: errMsg
-            });
-            await sendAlert('watchdog', name, errMsg, 'error');
-            io.emit('watchdog_event', { name: name, status: 'down', message: errMsg, timestamp: now });
+            // If the PM2 process no longer exists, remove from registry to stop repeated heal attempts
+            if (restartError.message && restartError.message.includes('not found')) {
+              console.warn('[watchdog] Process "' + name + '" not found in PM2 — removing from registry.');
+              try {
+                const reg = getRegistry();
+                delete reg.projects[name];
+                saveRegistry(reg);
+              } catch (regErr) {
+                console.error('[watchdog] Failed to remove stale project from registry:', regErr.message);
+              }
+              delete watchdogState[name];
+              delete watchdogFailCounts[name];
+            } else {
+              console.error('[watchdog]', errMsg);
+              watchdogState[name] = Object.assign({}, watchdogState[name], {
+                status: 'down',
+                lastError: errMsg
+              });
+              await sendAlert('watchdog', name, errMsg, 'error');
+              io.emit('watchdog_event', { name: name, status: 'down', message: errMsg, timestamp: now });
+            }
           }
         }
       }

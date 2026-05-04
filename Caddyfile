@@ -1,10 +1,9 @@
 # 1. THE MAIN FRONTEND
 epicglobal.app {
-    # This points to wherever your main dashboard is running
-    # If it's a static build, we use 'file_server'. 
-    # If it's running on a port, use 'reverse_proxy'.
-    reverse_proxy localhost:3000 
-    
+    root * /var/www/myapp/dist
+    file_server
+    try_files {path} /index.html
+
     # Compress responses to save bandwidth on mobile
     encode gzip zstd
 }
@@ -12,13 +11,17 @@ epicglobal.app {
 # 2. THE ORCHESTRATOR API (The Remote Control)
 api.epicglobal.app {
     reverse_proxy localhost:4000
-    
+
     # Headers to ensure smooth communication with the iPad
     header {
         Access-Control-Allow-Origin https://epicglobal.app
-        Access-Control-Allow-Methods "GET, POST, OPTIONS"
-        Access-Control-Allow-Headers "Content-Type"
+        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, x-api-key, Authorization"
+        Access-Control-Allow-Credentials "true"
     }
+
+    @options method OPTIONS
+    respond @options 204
 }
 
 # 3. WILDCARD FOR YOUR PROJECTS (Optional but powerful)
