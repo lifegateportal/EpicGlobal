@@ -5,7 +5,7 @@ import {
   Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X, ChevronRight
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { API, ORCHESTRATOR_API_KEY, apiFetch } from '../api/client';
+import { API, getOrchestratorApiKey, apiFetch } from '../api/client';
 
 /* ─── types ─────────────────────────────────────────────────────── */
 type Source = 'github' | 'epicodespaces' | 'git' | 'upload';
@@ -128,8 +128,8 @@ export function SetupTab() {
   /* ── deploy ── */
   const handleDeploy = async (e: FormEvent) => {
     e.preventDefault();
-    if (!ORCHESTRATOR_API_KEY) {
-      toast.error('VITE_ORCHESTRATOR_API_KEY not set — cannot reach Orchestrator.');
+    if (!getOrchestratorApiKey()) {
+      toast.error('API key not set — go to Settings and save your ORCHESTRATOR_API_KEY first.');
       return;
     }
 
@@ -270,11 +270,11 @@ export function SetupTab() {
               <div className="space-y-2">
                 {[
                   ['EPICGLOBAL_API_URL', API],
-                  ['EPICGLOBAL_API_KEY', ORCHESTRATOR_API_KEY || '(not set — add VITE_ORCHESTRATOR_API_KEY)'],
+                  ['EPICGLOBAL_API_KEY', getOrchestratorApiKey() || '(not set — go to Settings to save your key)'],
                 ].map(([k, v]) => (
                   <div key={k} className="flex items-center gap-2 bg-black border border-zinc-800 rounded-md px-3 py-2">
                     <code className="text-xs text-zinc-500 shrink-0">{k}=</code>
-                    <code className={`text-xs flex-1 font-mono select-all ${k === 'EPICGLOBAL_API_KEY' && !ORCHESTRATOR_API_KEY ? 'text-amber-400' : 'text-indigo-300'}`}>{v}</code>
+                    <code className={`text-xs flex-1 font-mono select-all ${k === 'EPICGLOBAL_API_KEY' && !getOrchestratorApiKey() ? 'text-amber-400' : 'text-indigo-300'}`}>{v}</code>
                     <CopyBtn text={`${k}=${v}`} />
                   </div>
                 ))}

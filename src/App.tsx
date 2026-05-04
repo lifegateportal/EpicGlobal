@@ -115,9 +115,9 @@ export default function App() {
     { id: 'overview', label: 'Overview' },
     { id: 'deployments', label: 'Deployments' },
     { id: 'edge', label: 'Edge' },
-    { id: 'orchestrator', label: 'Backend Orchestrator' },
-    { id: 'settings', label: 'Settings' },
-    { id: 'setup', label: 'Setup' }
+    { id: 'setup', label: 'New Deploy' },
+    { id: 'orchestrator', label: 'Manage Projects' },
+    { id: 'settings', label: 'Settings' }
   ];
 
   return (
