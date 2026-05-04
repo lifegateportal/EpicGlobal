@@ -282,7 +282,26 @@ function compactLog(logText, limit = 12000) {
 }
 
 function buildCaddyConfig(registry) {
-  let config = 'api.epicglobal.app {\n  reverse_proxy localhost:4000\n}\n';
+  // Static frontend — always present
+  let config = 'epicglobal.app {\n' +
+    '  root * /var/www/myapp/dist\n' +
+    '  file_server\n' +
+    '  try_files {path} /index.html\n' +
+    '  encode gzip zstd\n' +
+    '}\n\n';
+
+  // Orchestrator API — always present with CORS
+  config += 'api.epicglobal.app {\n' +
+    '  reverse_proxy localhost:4000\n' +
+    '  header {\n' +
+    '    Access-Control-Allow-Origin https://epicglobal.app\n' +
+    '    Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"\n' +
+    '    Access-Control-Allow-Headers "Content-Type, x-api-key, Authorization"\n' +
+    '    Access-Control-Allow-Credentials "true"\n' +
+    '  }\n' +
+    '  @options method OPTIONS\n' +
+    '  respond @options 204\n' +
+    '}\n';
   
   Object.entries(registry.projects).forEach(([name, data]) => {
     const hosts = [name + '.epicglobal.app'];
