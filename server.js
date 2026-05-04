@@ -77,6 +77,28 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10mb' }));
 
+// ---------------------------------------------------------
+// API KEY PROTECTION
+// ---------------------------------------------------------
+const ORCHESTRATOR_API_KEY = process.env.ORCHESTRATOR_API_KEY || (() => {
+  const generated = crypto.randomBytes(32).toString('hex');
+  console.warn('⚠️  No ORCHESTRATOR_API_KEY set. Generated one-time key (not persisted):');
+  console.warn('   ORCHESTRATOR_API_KEY=' + generated);
+  return generated;
+})();
+
+function requireApiKey(req, res, next) {
+  const header = req.headers['x-api-key'] || req.headers['authorization'];
+  const provided = header ? header.replace(/^Bearer\s+/i, '') : null;
+  if (!provided || provided !== ORCHESTRATOR_API_KEY) {
+    return res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing API key.' });
+  }
+  next();
+}
+
+// Protect all orchestrator API routes
+app.use('/api/orchestrator', requireApiKey);
+
 // Global error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err);
@@ -815,6 +837,20 @@ app.get('/api/orchestrator/candidates', async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
+});
+
+// ---------------------------------------------------------
+// API: Connect Info (no auth — lets external apps verify endpoint)
+// ---------------------------------------------------------
+app.get('/api/orchestrator/connect-info', (req, res) => {
+  res.json({
+    success: true,
+    platform: 'EpicGlobal Orchestrator',
+    version: 'v3',
+    deployEndpoint: '/api/orchestrator/deploy',
+    authHeader: 'x-api-key',
+    docsUrl: 'https://epicglobal.app'
+  });
 });
 
 // ---------------------------------------------------------

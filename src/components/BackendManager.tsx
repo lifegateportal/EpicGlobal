@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { Trash2, RefreshCw, FileText, Plus, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Pencil, ExternalLink, Check, X } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
-import { BASE_URL, API } from '../api/client';
+import { BASE_URL, API, apiFetch } from '../api/client';
 import type { Project, HistoryEntry, QueueSnapshot, BackupManifest, WatchdogEntry, AlertConfig } from '../types';
 
 function StatusBadge({ status }: { status: string }) {
@@ -48,7 +48,7 @@ export default function ProjectOrchestrator() {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch(API + '/api/orchestrator/status', { cache: 'no-store' });
+      const res = await apiFetch(API + '/api/orchestrator/status', { cache: 'no-store' });
       const data = await res.json();
       if (data.success) {
         const nextProjects = data.projects && typeof data.projects === 'object' ? data.projects : {};
@@ -63,7 +63,7 @@ export default function ProjectOrchestrator() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch(API + '/api/orchestrator/history', { cache: 'no-store' });
+      const res = await apiFetch(API + '/api/orchestrator/history', { cache: 'no-store' });
       const data = await res.json();
       if (data.success) setHistory(Array.isArray(data.history) ? data.history : []);
     } catch {}
@@ -77,7 +77,7 @@ export default function ProjectOrchestrator() {
 
   const fetchQueue = async () => {
     try {
-      const res = await fetch(API + '/api/orchestrator/queue', { cache: 'no-store' });
+      const res = await apiFetch(API + '/api/orchestrator/queue', { cache: 'no-store' });
       const data = await res.json();
       if (data.success && data.queue) {
         setQueue({
@@ -101,7 +101,7 @@ export default function ProjectOrchestrator() {
 
   const fetchBackups = async () => {
     try {
-      const res = await fetch(API + '/api/orchestrator/backups');
+      const res = await apiFetch(API + '/api/orchestrator/backups');
       const data = await res.json();
       if (data.success) setBackups(data.backups || []);
     } catch {}
@@ -113,7 +113,7 @@ export default function ProjectOrchestrator() {
       return;
     }
     try {
-      const res = await fetch(API + '/api/orchestrator/secrets/' + vaultForm.projectName.trim().toLowerCase());
+      const res = await apiFetch(API + '/api/orchestrator/secrets/' + vaultForm.projectName.trim().toLowerCase());
       const data = await res.json();
       if (data.success) {
         setVaultPreview(data.secrets || {});
@@ -137,7 +137,7 @@ export default function ProjectOrchestrator() {
     }
     setActionLoading(rotate ? 'vault-rotate' : 'vault-save');
     try {
-      const res = await fetch(API + '/api/orchestrator/secrets/' + vaultForm.projectName.trim().toLowerCase(), {
+      const res = await apiFetch(API + '/api/orchestrator/secrets/' + vaultForm.projectName.trim().toLowerCase(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ envText: vaultForm.envText, rotate: rotate })
@@ -163,7 +163,7 @@ export default function ProjectOrchestrator() {
     }
     setActionLoading('vault-apply');
     try {
-      const res = await fetch(API + '/api/orchestrator/secrets/' + vaultForm.projectName.trim().toLowerCase() + '/apply', {
+      const res = await apiFetch(API + '/api/orchestrator/secrets/' + vaultForm.projectName.trim().toLowerCase() + '/apply', {
         method: 'POST'
       });
       const data = await res.json();
@@ -183,7 +183,7 @@ export default function ProjectOrchestrator() {
   const createBackup = async () => {
     setActionLoading('backup-create');
     try {
-      const res = await fetch(API + '/api/orchestrator/backups/create', {
+      const res = await apiFetch(API + '/api/orchestrator/backups/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ includeDeployments: true })
@@ -206,7 +206,7 @@ export default function ProjectOrchestrator() {
     if (!confirm('Restore backup ' + backupId + '? This may overwrite deployment state.')) return;
     setActionLoading('backup-restore-' + backupId);
     try {
-      const res = await fetch(API + '/api/orchestrator/backups/restore', {
+      const res = await apiFetch(API + '/api/orchestrator/backups/restore', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ backupId: backupId, includeDeployments: true })
@@ -228,7 +228,7 @@ export default function ProjectOrchestrator() {
 
   const fetchWatchdog = async () => {
     try {
-      const res = await fetch(API + '/api/orchestrator/watchdog');
+      const res = await apiFetch(API + '/api/orchestrator/watchdog');
       const data = await res.json();
       if (data.success) setWatchdog(data.watchdog || {});
     } catch {}
@@ -236,7 +236,7 @@ export default function ProjectOrchestrator() {
 
   const fetchAlertConfig = async () => {
     try {
-      const res = await fetch(API + '/api/orchestrator/alerts/config');
+      const res = await apiFetch(API + '/api/orchestrator/alerts/config');
       const data = await res.json();
       if (data.success) setAlertConfig(data.config);
     } catch {}
@@ -245,7 +245,7 @@ export default function ProjectOrchestrator() {
   const runRepair = async () => {
     setActionLoading('repair');
     try {
-      const res = await fetch(API + '/api/orchestrator/repair', { method: 'POST' });
+      const res = await apiFetch(API + '/api/orchestrator/repair', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         toast.success('Repair complete. Synced ' + data.synced + ' project(s). Caddy reloaded.');
@@ -264,7 +264,7 @@ export default function ProjectOrchestrator() {
   const sendTestAlert = async () => {
     setActionLoading('alert-test');
     try {
-      const res = await fetch(API + '/api/orchestrator/alerts/test', {
+      const res = await apiFetch(API + '/api/orchestrator/alerts/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'manual' })
@@ -328,7 +328,7 @@ export default function ProjectOrchestrator() {
       };
       if (form.accessToken.trim()) payload.accessToken = form.accessToken.trim();
 
-      const res = await fetch(API + '/api/orchestrator/deploy', {
+      const res = await apiFetch(API + '/api/orchestrator/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -361,7 +361,7 @@ export default function ProjectOrchestrator() {
     if (!confirm('Delete ' + name + '? This removes all files and stops the process.')) return;
     setActionLoading('delete-' + name);
     try {
-      const res = await fetch(API + '/api/orchestrator/delete', {
+      const res = await apiFetch(API + '/api/orchestrator/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectName: name })
@@ -385,7 +385,7 @@ export default function ProjectOrchestrator() {
     setActionLoading('rollback-' + name);
     setDeployStatus({ loading: true, logs: 'Rolling back ' + name + '...', error: '' });
     try {
-      const res = await fetch(API + '/api/orchestrator/deploy', {
+      const res = await apiFetch(API + '/api/orchestrator/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectName: name, repoUrl: repoUrl })
@@ -411,7 +411,7 @@ export default function ProjectOrchestrator() {
 
   const handleFetchFiles = async (name: string) => {
     try {
-      const res = await fetch(API + '/api/orchestrator/files/' + name);
+      const res = await apiFetch(API + '/api/orchestrator/files/' + name);
       const data = await res.json();
       if (data.success) setProjectFiles(prev => ({ ...prev, [name]: data.files }));
     } catch { /* ignore */ }
@@ -422,7 +422,7 @@ export default function ProjectOrchestrator() {
     if (!newFile || newFile === oldFile) { setRenamingFile(null); return; }
     setActionLoading('rename-file-' + projectName);
     try {
-      const res = await fetch(API + '/api/orchestrator/rename-file', {
+      const res = await apiFetch(API + '/api/orchestrator/rename-file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectName, oldFile, newFile }),
@@ -444,7 +444,7 @@ export default function ProjectOrchestrator() {
     if (!newName || newName === oldName) { setRenamingProject(null); return; }
     setActionLoading('rename-' + oldName);
     try {
-      const res = await fetch(API + '/api/orchestrator/rename', {
+      const res = await apiFetch(API + '/api/orchestrator/rename', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ oldName, newName }),
@@ -474,7 +474,7 @@ export default function ProjectOrchestrator() {
       fd.append('file', uploadFile);
       fd.append('projectName', uploadForm.projectName);
       if (uploadForm.domain) fd.append('domain', uploadForm.domain);
-      const res = await fetch(API + '/api/orchestrator/upload', { method: 'POST', body: fd });
+      const res = await apiFetch(API + '/api/orchestrator/upload', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.success) {
         toast.success(uploadForm.projectName + ' deployed (static).');
@@ -497,7 +497,7 @@ export default function ProjectOrchestrator() {
     if (expandedLogs === name) { setExpandedLogs(null); return; }
     setExpandedLogs(name);
     try {
-      const res = await fetch(API + '/api/logs/' + name);
+      const res = await apiFetch(API + '/api/logs/' + name);
       const data = await res.json();
       setProjectLogs((prev) => ({ ...prev, [name]: data.logs || 'No logs available.' }));
     } catch {

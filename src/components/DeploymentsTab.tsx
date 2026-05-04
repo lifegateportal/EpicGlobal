@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
-import { API } from '../api/client';
+import { API, apiFetch } from '../api/client';
 import type { HistoryEntry, Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -46,8 +46,8 @@ export function DeploymentsTab() {
     setLoading(true);
     try {
       const [histRes, projRes] = await Promise.all([
-        fetch(`${API}/api/orchestrator/history`, { cache: 'no-store' }),
-        fetch(`${API}/api/orchestrator/status`,  { cache: 'no-store' }),
+        apiFetch(`${API}/api/orchestrator/history`, { cache: 'no-store' }),
+        apiFetch(`${API}/api/orchestrator/status`,  { cache: 'no-store' }),
       ]);
       const [histData, projData] = await Promise.all([histRes.json(), projRes.json()]);
       if (histData.success) setHistory(Array.isArray(histData.history) ? histData.history : []);
@@ -70,7 +70,7 @@ export function DeploymentsTab() {
 
   const loadVaultPreview = async (name: string) => {
     try {
-      const res  = await fetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}`);
+      const res  = await apiFetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}`);
       const data = await res.json();
       if (data.success) {
         patchVault(name, { storedKeys: data.secrets ?? {}, updatedAt: data.updatedAt ?? null, loaded: true });
@@ -112,7 +112,7 @@ export function DeploymentsTab() {
     patchVault(name, { saving: true });
 
     try {
-      const res  = await fetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}`, {
+      const res  = await apiFetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ envText, rotate }),
@@ -135,7 +135,7 @@ export function DeploymentsTab() {
   const applySecrets = async (name: string) => {
     patchVault(name, { saving: true });
     try {
-      const res  = await fetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}/apply`, { method: 'POST' });
+      const res  = await apiFetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(name.toLowerCase())}/apply`, { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         toast.success(data.message || 'Secrets applied and process restarted.');

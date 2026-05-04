@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
-import { BASE_URL, API } from '../api/client';
+import { BASE_URL, API, apiFetch } from '../api/client';
 import type { TelemetryPoint } from '../types';
 
 function clampPercent(value: unknown): number {
@@ -111,7 +111,7 @@ export function useTelemetry(enabled: boolean): TelemetryState {
 
     const poll = async () => {
       try {
-        const res = await fetch(`${API}/api/orchestrator/telemetry?ts=${Date.now()}`, {
+        const res = await apiFetch(`${API}/api/orchestrator/telemetry?ts=${Date.now()}`, {
           cache: 'no-store',
         });
         const data = await res.json();
