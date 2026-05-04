@@ -6,14 +6,34 @@ export const BASE_URL: string = configuredSocketUrl || window.location.origin;
 /** Trailing-slash-stripped BASE_URL for direct path concatenation. */
 export const API: string = BASE_URL.replace(/\/$/, '');
 
-/** API key sent with every orchestrator request. Set via VITE_ORCHESTRATOR_API_KEY. */
+const LS_KEY = 'eg_orchestrator_api_key';
+
+/** API key sent with every orchestrator request.
+ *  Priority: localStorage (user-entered) → VITE_ORCHESTRATOR_API_KEY (build-time) */
+export function getOrchestratorApiKey(): string {
+  try {
+    return localStorage.getItem(LS_KEY)?.trim() || import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '';
+  } catch {
+    return import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '';
+  }
+}
+
+export function setOrchestratorApiKey(key: string): void {
+  try {
+    if (key.trim()) localStorage.setItem(LS_KEY, key.trim());
+    else localStorage.removeItem(LS_KEY);
+  } catch { /* ignore */ }
+}
+
+/** @deprecated use getOrchestratorApiKey() for live value */
 export const ORCHESTRATOR_API_KEY: string = import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '';
 
 /** Returns headers including the API key for orchestrator fetch calls. */
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  const key = getOrchestratorApiKey();
   return {
     'Content-Type': 'application/json',
-    ...(ORCHESTRATOR_API_KEY ? { 'x-api-key': ORCHESTRATOR_API_KEY } : {}),
+    ...(key ? { 'x-api-key': key } : {}),
     ...extra,
   };
 }
@@ -23,8 +43,9 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
  * header on any request whose URL contains `/api/orchestrator`.
  */
 export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const key = getOrchestratorApiKey();
   const isOrchestrator = input.includes('/api/orchestrator');
-  if (!isOrchestrator || !ORCHESTRATOR_API_KEY) return fetch(input, init);
+  if (!isOrchestrator || !key) return fetch(input, init);
   const existingHeaders = init?.headers
     ? (init.headers instanceof Headers
         ? Object.fromEntries((init.headers as Headers).entries())
@@ -32,6 +53,6 @@ export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
     : {};
   return fetch(input, {
     ...init,
-    headers: { 'x-api-key': ORCHESTRATOR_API_KEY, ...existingHeaders },
+    headers: { 'x-api-key': key, ...existingHeaders },
   });
 }

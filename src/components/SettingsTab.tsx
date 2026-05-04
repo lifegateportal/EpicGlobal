@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ApiTopology } from './ApiTopology';
-import { Copy, Eye, EyeOff, Check, Link2 } from 'lucide-react';
-import { API, ORCHESTRATOR_API_KEY } from '../api/client';
+import { Copy, Eye, EyeOff, Check, Link2, Save } from 'lucide-react';
+import { API, getOrchestratorApiKey, setOrchestratorApiKey } from '../api/client';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -20,10 +20,19 @@ function CopyButton({ text }: { text: string }) {
 
 export function SettingsTab() {
   const [showKey, setShowKey] = useState(false);
+  const [keyInput, setKeyInput] = useState(() => getOrchestratorApiKey());
+  const [saved, setSaved] = useState(false);
   const apiUrl = API;
-  const maskedKey = ORCHESTRATOR_API_KEY
-    ? ORCHESTRATOR_API_KEY.slice(0, 6) + '••••••••••••••••••••••••••' + ORCHESTRATOR_API_KEY.slice(-4)
-    : '(not set — add VITE_ORCHESTRATOR_API_KEY to your build env)';
+  const activeKey = getOrchestratorApiKey();
+  const maskedKey = activeKey
+    ? activeKey.slice(0, 6) + '••••••••••••••••••••••••••' + activeKey.slice(-4)
+    : '';
+
+  const handleSave = () => {
+    setOrchestratorApiKey(keyInput);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -48,26 +57,34 @@ export function SettingsTab() {
             </div>
           </div>
 
-          {/* API Key */}
+          {/* API Key — editable */}
           <div className="space-y-1.5">
             <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">API Key</label>
             <div className="flex items-center gap-2 bg-black border border-zinc-800 rounded-md px-3 py-2.5">
-              <code className="text-sm text-emerald-300 flex-1 font-mono break-all">
-                {ORCHESTRATOR_API_KEY
-                  ? (showKey ? ORCHESTRATOR_API_KEY : maskedKey)
-                  : <span className="text-zinc-600 italic">not configured</span>}
-              </code>
-              {ORCHESTRATOR_API_KEY && (
-                <>
-                  <button onClick={() => setShowKey(v => !v)} className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors">
-                    {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
-                  </button>
-                  <CopyButton text={ORCHESTRATOR_API_KEY} />
-                </>
-              )}
+              <input
+                type={showKey ? 'text' : 'password'}
+                className="flex-1 bg-transparent text-sm text-emerald-300 font-mono outline-none placeholder:text-zinc-600"
+                placeholder="Paste your ORCHESTRATOR_API_KEY here…"
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+              />
+              <button onClick={() => setShowKey(v => !v)} className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors">
+                {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+              {keyInput && <CopyButton text={keyInput} />}
+              <button
+                onClick={handleSave}
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-semibold transition-colors"
+              >
+                {saved ? <Check size={12} className="text-green-300" /> : <Save size={12} />}
+                {saved ? 'Saved' : 'Save'}
+              </button>
             </div>
-            {!ORCHESTRATOR_API_KEY && (
-              <p className="text-xs text-amber-500/80">Set <code className="bg-zinc-900 px-1 rounded">VITE_ORCHESTRATOR_API_KEY</code> in your build env and rebuild to enable this.</p>
+            {!activeKey && (
+              <p className="text-xs text-amber-500/80">Paste your server's <code className="bg-zinc-900 px-1 rounded">ORCHESTRATOR_API_KEY</code> above and click Save.</p>
+            )}
+            {activeKey && (
+              <p className="text-xs text-zinc-600">Active key: <span className="text-zinc-500 font-mono">{maskedKey}</span> — stored in browser localStorage.</p>
             )}
           </div>
 
@@ -87,7 +104,7 @@ Body:
   "domain": "my-app.epicglobal.app"
 }`}</pre>
               <div className="absolute top-2 right-2">
-                <CopyButton text={`POST ${apiUrl}/api/orchestrator/deploy\nHeaders:\n  x-api-key: ${ORCHESTRATOR_API_KEY}\n  Content-Type: application/json\n\nBody:\n{\n  "projectName": "my-app",\n  "repoUrl": "https://github.com/you/repo.git",\n  "domain": "my-app.epicglobal.app"\n}`} />
+                <CopyButton text={`POST ${apiUrl}/api/orchestrator/deploy\nHeaders:\n  x-api-key: ${activeKey}\n  Content-Type: application/json\n\nBody:\n{\n  "projectName": "my-app",\n  "repoUrl": "https://github.com/you/repo.git",\n  "domain": "my-app.epicglobal.app"\n}`} />
               </div>
             </div>
           </div>
