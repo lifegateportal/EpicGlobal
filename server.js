@@ -265,8 +265,8 @@ function buildCaddyConfig(registry) {
       // Serve static files directly via Caddy (no PM2 process needed)
       const serveDir = data.staticDir || path.join(DEPLOY_ROOT, name);
       hosts.forEach((host) => {
-        // try_files MUST be before file_server in Caddy v2
-        config += '\n' + host + ' {\n  root * ' + serveDir + '\n  try_files {path} /index.html\n  file_server\n}\n';
+        // file_server natively serves index.html for directory requests
+        config += '\n' + host + ' {\n  root * ' + serveDir + '\n  file_server\n}\n';
       });
     } else {
       hosts.forEach((host) => {
@@ -916,8 +916,17 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
       const saveName = (filename.endsWith('.html') || filename.endsWith('.htm'))
         ? 'index.html'
         : req.file.originalname;
-      fs.writeFileSync(path.join(projectDir, saveName), req.file.buffer);
+      const writePath = path.join(projectDir, saveName);
+      fs.writeFileSync(writePath, req.file.buffer);
+      // Verify write succeeded and is non-empty
+      const written = fs.statSync(writePath);
+      if (written.size === 0) {
+        return res.status(400).json({ success: false, error: 'File was written but is empty.' });
+      }
     }
+
+    // Ensure Caddy (which may run as non-root) can read all uploaded files
+    await execPromise('chmod -R 755 ' + quoteForShell(projectDir));
 
     // If zip extracted a single root folder, serve from inside it
     const entries = fs.readdirSync(projectDir);
