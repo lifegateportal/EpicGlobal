@@ -22,8 +22,10 @@ api.epicglobal.app {
 }
 
 # 3. WILDCARD FOR YOUR PROJECTS (Optional but powerful)
-# This allows any project you launch to get a subdomain automatically
-# e.g. alpha-test.epicglobal.app
-*.epicglobal.app {
-    # This requires DNS validation, we can set this up later if needed.
-}
+# Uncomment and configure DNS challenge provider before enabling this.
+# *.epicglobal.app {
+#     tls {
+#         dns <provider> <credentials>
+#     }
+#     reverse_proxy localhost:3000
+# }
