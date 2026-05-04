@@ -1,8 +1,8 @@
 import { useState, useRef, type FormEvent, type ChangeEvent } from 'react';
 import {
-  Github, GitBranch, Upload, Zap, ArrowRight, ArrowLeft,
+  GitBranch, Upload, Zap, ArrowRight, ArrowLeft,
   CheckCircle2, XCircle, Loader2, ExternalLink, Copy, Check,
-  Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X
+  Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X, ChevronRight
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { API, ORCHESTRATOR_API_KEY, apiFetch } from '../api/client';
@@ -44,7 +44,7 @@ const SOURCES: { id: Source; label: string; sub: string; icon: React.ReactNode; 
     id: 'github',
     label: 'GitHub',
     sub: 'Clone & deploy any public or private repository',
-    icon: <Github size={22} />,
+    icon: <GitBranch size={22} className="text-zinc-400" />,  // lucide-react has no Github icon; GitBranch used as proxy
     accent: 'hover:border-zinc-500 hover:bg-zinc-900/40',
   },
   {
@@ -313,7 +313,7 @@ export function SetupTab() {
                 {source === 'github' ? 'GitHub repo URL *' : 'Git remote URL *'}
               </label>
               <div className="relative">
-                <Github size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
+                <GitBranch size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
                 <input
                   type="url"
                   value={repoUrl}
@@ -441,15 +441,15 @@ export function SetupTab() {
           {/* summary card */}
           {deployState.phase !== 'success' && (
             <div className="border border-zinc-800 bg-[#0A0A0A] rounded-xl divide-y divide-zinc-800/60">
-              {[
+              {([
                 { label: 'Source', value: SOURCES.find(s => s.id === source)?.label },
-                source !== 'upload' && { label: 'Repo URL', value: repoUrl },
-                source === 'upload' && uploadFile && { label: 'File', value: uploadFile.name },
+                source !== 'upload' ? { label: 'Repo URL', value: repoUrl } : null,
+                source === 'upload' && uploadFile ? { label: 'File', value: uploadFile.name } : null,
                 { label: 'Project name', value: slugify(projectName) || '—', mono: true },
                 { label: 'Domain', value: domain || `${slugify(projectName)}.epicglobal.app`, mono: true },
-                envRows.filter(r => r.key).length > 0 && { label: 'Env vars', value: `${envRows.filter(r => r.key).length} variable(s)` },
-                accessToken && { label: 'Access token', value: '••••••••' },
-              ].filter(Boolean).map((row: { label: string; value?: string; mono?: boolean } | false, i) => row && (
+                envRows.filter(r => r.key).length > 0 ? { label: 'Env vars', value: `${envRows.filter(r => r.key).length} variable(s)` } : null,
+                accessToken ? { label: 'Access token', value: '••••••••' } : null,
+              ] as ({ label: string; value?: string; mono?: boolean } | null)[]).filter((row): row is { label: string; value?: string; mono?: boolean } => row !== null).map((row, i) => (
                 <div key={i} className="flex items-center gap-4 px-5 py-3">
                   <span className="text-xs text-zinc-500 w-28 shrink-0">{row.label}</span>
                   <span className={`text-sm text-zinc-200 ${row.mono ? 'font-mono' : ''} truncate`}>{row.value}</span>
