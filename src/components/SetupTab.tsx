@@ -579,7 +579,7 @@ export function SetupTab() {
           <div className="p-5 space-y-3">
             {[
               { label: 'API URL', value: API, color: 'text-indigo-300' },
-              { label: 'API Key', value: ORCHESTRATOR_API_KEY || '(set VITE_ORCHESTRATOR_API_KEY)', color: ORCHESTRATOR_API_KEY ? 'text-emerald-300' : 'text-amber-400' },
+              { label: 'API Key', value: getOrchestratorApiKey() || '(not set — save in Settings)', color: getOrchestratorApiKey() ? 'text-emerald-300' : 'text-amber-400' },
             ].map(({ label, value, color }) => (
               <div key={label} className="space-y-1">
                 <p className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">{label}</p>
