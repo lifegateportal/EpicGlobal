@@ -1,3 +1,7 @@
+// Load .env file if present (must be first).
+// override:true ensures stale/empty PM2 env values do not block .env values.
+try { require('dotenv').config({ path: require('path').join(__dirname, '.env'), override: true }); } catch (e) {}
+
 const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
@@ -49,7 +53,8 @@ const io = new Server(server, {
         'https://api.epicglobal.app'
       ];
       const isGithubPreview = /https:\/\/.*\.app\.github\.dev$/.test(origin);
-      const isAllowed = allowed.includes(origin) || isGithubPreview;
+      const isCloudflarePreview = /https:\/\/.*\.pages\.dev$/.test(origin);
+      const isAllowed = allowed.includes(origin) || isGithubPreview || isCloudflarePreview;
       callback(isAllowed ? null : new Error('Origin not allowed by CORS'), isAllowed);
     },
     methods: ['GET', 'POST'],
@@ -70,7 +75,8 @@ app.use(cors({
       'https://api.epicglobal.app'
     ];
     const isGithubPreview = /https:\/\/.*\.app\.github\.dev$/.test(origin);
-    const isAllowed = allowed.includes(origin) || isGithubPreview;
+    const isCloudflarePreview = /https:\/\/.*\.pages\.dev$/.test(origin);
+    const isAllowed = allowed.includes(origin) || isGithubPreview || isCloudflarePreview;
     callback(isAllowed ? null : new Error('Origin not allowed by CORS'), isAllowed);
   },
   credentials: true
@@ -80,9 +86,15 @@ app.use(express.json({ limit: '10mb' }));
 // ---------------------------------------------------------
 // API KEY PROTECTION
 // ---------------------------------------------------------
-const ORCHESTRATOR_API_KEY = process.env.ORCHESTRATOR_API_KEY || (() => {
+const ORCHESTRATOR_API_KEY = (process.env.ORCHESTRATOR_API_KEY || '').trim() || (() => {
   const generated = crypto.randomBytes(32).toString('hex');
-  console.warn('⚠️  No ORCHESTRATOR_API_KEY set. Generated one-time key (not persisted):');
+  try {
+    const envPath = path.join(__dirname, '.env');
+    fs.appendFileSync(envPath, `\nORCHESTRATOR_API_KEY=${generated}\n`);
+    console.warn('⚠️  No ORCHESTRATOR_API_KEY set. Generated and persisted to .env:');
+  } catch {
+    console.warn('⚠️  No ORCHESTRATOR_API_KEY set. Generated one-time key (could not persist):');
+  }
   console.warn('   ORCHESTRATOR_API_KEY=' + generated);
   return generated;
 })();
