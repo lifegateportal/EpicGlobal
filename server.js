@@ -302,15 +302,9 @@ function buildCaddyConfig(registry) {
     '  encode gzip zstd\n' +
     '}\n\n';
 
-  // Orchestrator API — always present with CORS
+  // Orchestrator API — CORS is handled by Express middleware in server.js
   config += 'api.epicglobal.app {\n' +
     '  reverse_proxy localhost:4000\n' +
-    '  header {\n' +
-    '    Access-Control-Allow-Origin https://epicglobal.app\n' +
-    '    Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"\n' +
-    '    Access-Control-Allow-Headers "Content-Type, x-api-key, Authorization"\n' +
-    '    Access-Control-Allow-Credentials "true"\n' +
-    '  }\n' +
     '  @options method OPTIONS\n' +
     '  respond @options 204\n' +
     '}\n';
