@@ -296,13 +296,13 @@ export function SetupTab() {
                 <Upload size={20} className="text-zinc-500" />
                 {uploadFile
                   ? <p className="text-sm text-zinc-200 font-medium">{uploadFile.name}</p>
-                  : <p className="text-sm text-zinc-500">Click to select or drop a .zip / .tar.gz</p>}
+                  : <p className="text-sm text-zinc-500">Click to select or drop a .zip or index.html</p>}
                 <p className="text-xs text-zinc-600">Max 100 MB</p>
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".zip,.tar.gz,.tgz"
+                accept=".zip,.html,.htm,text/html"
                 className="hidden"
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setUploadFile(e.target.files?.[0] ?? null)}
               />

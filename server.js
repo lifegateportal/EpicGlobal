@@ -991,7 +991,7 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
           .on('close', resolve)
           .on('error', reject);
       });
-    } else {
+    } else if (filename.endsWith('.html') || filename.endsWith('.htm')) {
       // Always save as index.html — Caddy needs index.html at root regardless of upload filename
       const writePath = path.join(projectDir, 'index.html');
       fs.writeFileSync(writePath, req.file.buffer);
@@ -1000,6 +1000,11 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
       if (written.size === 0) {
         return res.status(400).json({ success: false, error: 'File was written but is empty.' });
       }
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Unsupported file type. Upload a .zip or index.html file.'
+      });
     }
 
     // Ensure Caddy (which may run as non-root) can read all uploaded files
