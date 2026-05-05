@@ -308,10 +308,9 @@ function buildCaddyConfig(registry) {
     '}\n';
   
   Object.entries(registry.projects).forEach(([name, data]) => {
-    const hosts = [name + '.epicglobal.app'];
-    if (data.domain) {
-      hosts.push(data.domain);
-    }
+    const hostSet = new Set([name + '.epicglobal.app']);
+    if (data.domain) hostSet.add(data.domain);
+    const hosts = Array.from(hostSet);
 
     if (data.deployType === 'static') {
       // Serve static files directly via Caddy (no PM2 process needed)
