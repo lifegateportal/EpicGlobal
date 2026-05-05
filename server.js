@@ -305,8 +305,6 @@ function buildCaddyConfig(registry) {
   // Orchestrator API — CORS is handled by Express middleware in server.js
   config += 'api.epicglobal.app {\n' +
     '  reverse_proxy localhost:4000\n' +
-    '  @options method OPTIONS\n' +
-    '  respond @options 204\n' +
     '}\n';
   
   Object.entries(registry.projects).forEach(([name, data]) => {

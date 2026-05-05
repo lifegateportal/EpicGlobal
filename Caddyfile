@@ -11,9 +11,6 @@ epicglobal.app {
 # 2. THE ORCHESTRATOR API (The Remote Control)
 api.epicglobal.app {
     reverse_proxy localhost:4000
-
-    @options method OPTIONS
-    respond @options 204
 }
 
 # 3. WILDCARD FOR YOUR PROJECTS (Optional but powerful)
