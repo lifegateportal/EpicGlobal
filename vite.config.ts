@@ -14,12 +14,12 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         codeSplitting: true,
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom'],
-          'chart-vendor': ['recharts'],
-          'flow-vendor': ['@xyflow/react'],
-          'motion-vendor': ['framer-motion'],
-          'socket-vendor': ['socket.io-client'],
+        manualChunks: (id: string) => {
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'react-vendor'
+          if (id.includes('node_modules/recharts')) return 'chart-vendor'
+          if (id.includes('node_modules/@xyflow')) return 'flow-vendor'
+          if (id.includes('node_modules/framer-motion')) return 'motion-vendor'
+          if (id.includes('node_modules/socket.io-client')) return 'socket-vendor'
         },
       },
     },
