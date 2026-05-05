@@ -24,3 +24,10 @@ dist-ssr
 *.sw?
 server.js.old
 server.js.old
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
