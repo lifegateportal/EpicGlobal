@@ -1,7 +1,17 @@
 const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 
+function resolveDefaultBaseUrl(): string {
+  const host = window.location.hostname.toLowerCase();
+  const isEpicGlobalHost = host === 'epicglobal.app' || host === 'www.epicglobal.app';
+  const isCloudflarePreview = host.endsWith('.pages.dev');
+  if (isEpicGlobalHost || isCloudflarePreview) {
+    return 'https://api.epicglobal.app';
+  }
+  return window.location.origin;
+}
+
 /** Base WebSocket / HTTP origin shared across all API calls. */
-export const BASE_URL: string = configuredSocketUrl || window.location.origin;
+export const BASE_URL: string = configuredSocketUrl || resolveDefaultBaseUrl();
 
 /** Trailing-slash-stripped BASE_URL for direct path concatenation. */
 export const API: string = BASE_URL.replace(/\/$/, '');
