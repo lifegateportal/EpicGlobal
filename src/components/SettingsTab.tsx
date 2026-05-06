@@ -35,7 +35,7 @@ export function SettingsTab() {
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="space-y-6">
 
       {/* CONNECT EXTERNAL APP */}
       <div className="border border-indigo-900/50 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">

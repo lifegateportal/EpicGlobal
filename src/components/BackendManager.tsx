@@ -424,7 +424,7 @@ export default function ProjectOrchestrator() {
   const projectList = Object.entries(projects).filter(([name]) => Boolean(name) && name !== 'undefined');
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="space-y-6">
 
       {/* DEPLOY QUEUE */}
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">

@@ -194,7 +194,7 @@ export function SetupTab() {
 
   /* ────────────────── render ────────────────────────────────────── */
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="space-y-6">
 
       {/* header */}
       <div className="flex items-center justify-between">

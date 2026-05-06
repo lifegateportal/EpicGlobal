@@ -22,7 +22,7 @@ export function CommandPalette({ setTab, openTerminal }: { setTab: (t: string) =
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div className="w-full max-w-xl bg-[#0A0A0A] border border-zinc-800/60 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="w-full max-w-xl bg-[#0A0A0A] border border-zinc-800/60 rounded-xl shadow-2xl overflow-hidden">
         <Command label="Global Command Menu" className="w-full">
           <div className="flex items-center border-b border-zinc-800/60 px-4">
             <Search size={18} className="text-zinc-500 mr-2" />

@@ -13,7 +13,7 @@ export function OverviewTab({
   connectionStatusDetail,
 }: OverviewTabProps) {
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="space-y-6">
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
         <div className="p-4 sm:p-6 border-b border-zinc-800/60">
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-1">
