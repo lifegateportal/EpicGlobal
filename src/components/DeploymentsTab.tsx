@@ -207,8 +207,7 @@ export function DeploymentsTab() {
             {query ? 'No matching deployments.' : 'No deployments yet. Deploy a project from the Orchestrator tab.'}
           </div>
         ) : (
-          <div className="divide-y divide-zinc-800/60 overflow-hidden max-h-[440px] overflow-y-auto">
-            {filtered.map((entry) => {
+          <div className="divide-y divide-zinc-800/60 max-h-[440px] overflow-y-auto">{filtered.map((entry) => {
               const liveProject = projects[entry.projectName];
               const url = entry.details?.url
                 ? String(entry.details.url)
