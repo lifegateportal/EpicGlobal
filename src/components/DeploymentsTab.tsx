@@ -39,6 +39,7 @@ export function DeploymentsTab() {
   const [query, setQuery] = useState('');
   const [expandedVault, setExpandedVault] = useState<string | null>(null);
   const [vaults, setVaults] = useState<Record<string, ProjectVault>>({});
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -60,6 +61,26 @@ export function DeploymentsTab() {
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // ── Delete history entry ───────────────────────────────────────────────────
+
+  const deleteEntry = async (id: number) => {
+    setDeletingId(id);
+    try {
+      const res = await apiFetch(`${API}/api/orchestrator/history/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        setHistory(prev => prev.filter(e => e.id !== id));
+        toast.success('Entry removed.');
+      } else {
+        toast.error(data.error || 'Could not delete entry.');
+      }
+    } catch {
+      toast.error('Could not reach API.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   // ── Vault helpers ──────────────────────────────────────────────────────────
 
@@ -186,7 +207,7 @@ export function DeploymentsTab() {
             {query ? 'No matching deployments.' : 'No deployments yet. Deploy a project from the Orchestrator tab.'}
           </div>
         ) : (
-          <div className="divide-y divide-zinc-800/60 overflow-hidden">
+          <div className="divide-y divide-zinc-800/60 overflow-hidden max-h-[440px] overflow-y-auto">
             {filtered.map((entry) => {
               const liveProject = projects[entry.projectName];
               const url = entry.details?.url
@@ -197,7 +218,7 @@ export function DeploymentsTab() {
                   key={entry.id}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="p-3 sm:p-4 flex items-center justify-between bg-[#0A0A0A] hover:bg-zinc-900/40 transition-colors"
+                  className="p-3 sm:p-4 flex items-center justify-between bg-[#0A0A0A] hover:bg-zinc-900/40 transition-colors group"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     {entry.status === 'success'
@@ -225,11 +246,21 @@ export function DeploymentsTab() {
                       </div>
                     </div>
                   </div>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ml-2 ${
-                    entry.status === 'success' ? 'text-green-400 bg-green-950' :
-                    entry.status === 'failed'  ? 'text-red-400 bg-red-950'   :
-                    'text-zinc-500 bg-zinc-800/60'
-                  }`}>{entry.status.toUpperCase()}</span>
+                  <div className="flex items-center gap-2 ml-2 shrink-0">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                      entry.status === 'success' ? 'text-green-400 bg-green-950' :
+                      entry.status === 'failed'  ? 'text-red-400 bg-red-950'   :
+                      'text-zinc-500 bg-zinc-800/60'
+                    }`}>{entry.status.toUpperCase()}</span>
+                    <button
+                      onClick={() => deleteEntry(entry.id)}
+                      disabled={deletingId === entry.id}
+                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-all disabled:opacity-30"
+                      title="Remove entry"
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
                 </motion.div>
               );
             })}

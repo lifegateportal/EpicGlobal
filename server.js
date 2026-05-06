@@ -1151,6 +1151,22 @@ app.get('/api/orchestrator/history', (req, res) => {
   res.json({ success: true, history: getHistory() });
 });
 
+app.delete('/api/orchestrator/history/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ success: false, error: 'Invalid id.' });
+  try {
+    const history = getHistory();
+    const next = history.filter(e => e.id !== id);
+    if (next.length === history.length) {
+      return res.status(404).json({ success: false, error: 'Entry not found.' });
+    }
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(next, null, 2));
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Could not delete entry.' });
+  }
+});
+
 // ---------------------------------------------------------
 // API: Encrypted Secrets Vault
 // ---------------------------------------------------------

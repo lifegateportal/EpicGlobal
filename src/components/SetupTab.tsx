@@ -89,6 +89,7 @@ export function SetupTab() {
   const [repoUrl, setRepoUrl]           = useState('');
   const [projectName, setProjectName]   = useState('');
   const [domain, setDomain]             = useState('');
+  const [customDomain, setCustomDomain] = useState(false);
   const [accessToken, setAccessToken]   = useState('');
   const [envRows, setEnvRows]           = useState<EnvRow[]>([]);
   const [uploadFile, setUploadFile]     = useState<File | null>(null);
@@ -106,7 +107,7 @@ export function SetupTab() {
   };
 
   const autoDomain = (name: string) => {
-    if (name) setDomain(`${name}.epicglobal.app`);
+    if (name && !customDomain) setDomain(`${name}.epicglobal.app`);
   };
 
   const updateEnvRow = (id: number, patch: Partial<EnvRow>) =>
@@ -186,7 +187,7 @@ export function SetupTab() {
   /* ── reset ── */
   const reset = () => {
     setStep(1); setSource(null);
-    setRepoUrl(''); setProjectName(''); setDomain(''); setAccessToken('');
+    setRepoUrl(''); setProjectName(''); setDomain(''); setCustomDomain(false); setAccessToken('');
     setEnvRows([]); setUploadFile(null); setLogLines('');
     setDeployState({ phase: 'idle' });
   };
@@ -341,17 +342,39 @@ export function SetupTab() {
               <p className="text-xs text-zinc-600">Lowercase, hyphens only. Used as PM2 process name.</p>
             </div>
             <div className="space-y-2">
-              <label className="text-xs text-zinc-400 font-medium flex items-center gap-1.5">
-                <Globe size={12} /> Subdomain
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-zinc-400 font-medium flex items-center gap-1.5">
+                  <Globe size={12} /> Domain
+                </label>
+                <div className="flex items-center gap-1 text-[11px] bg-zinc-900 border border-zinc-800 rounded-md p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => { setCustomDomain(false); if (projectName) setDomain(`${projectName}.epicglobal.app`); }}
+                    className={`px-2 py-0.5 rounded transition-colors ${!customDomain ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Subdomain
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setCustomDomain(true); setDomain(''); }}
+                    className={`px-2 py-0.5 rounded transition-colors ${customDomain ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  >
+                    Custom
+                  </button>
+                </div>
+              </div>
               <input
                 type="text"
                 value={domain}
                 onChange={e => setDomain(e.target.value)}
-                placeholder={`${projectName || 'my-app'}.epicglobal.app`}
+                placeholder={customDomain ? 'myapp.com' : `${projectName || 'my-app'}.epicglobal.app`}
                 className="w-full bg-black border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
               />
-              <p className="text-xs text-zinc-600">Leave blank to auto-generate from project name.</p>
+              <p className="text-xs text-zinc-600">
+                {customDomain
+                  ? 'Point your DNS A record to your server IP before deploying.'
+                  : 'Leave blank to auto-generate from project name.'}
+              </p>
             </div>
           </div>
 
