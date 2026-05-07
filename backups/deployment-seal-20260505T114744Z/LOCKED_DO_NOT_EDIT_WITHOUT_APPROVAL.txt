@@ -1,0 +1,3 @@
+DEPLOYMENT SEALED
+Date (UTC): '"$STAMP"'
+Rule: Do not modify this deployment without explicit owner approval.

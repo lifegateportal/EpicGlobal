@@ -1,0 +1,23 @@
+# 1. THE MAIN FRONTEND
+epicglobal.app {
+    root * /var/www/myapp/dist
+    file_server
+    try_files {path} /index.html
+
+    # Compress responses to save bandwidth on mobile
+    encode gzip zstd
+}
+
+# 2. THE ORCHESTRATOR API (The Remote Control)
+api.epicglobal.app {
+    reverse_proxy localhost:4000
+}
+
+# 3. WILDCARD FOR YOUR PROJECTS (Optional but powerful)
+# Uncomment and configure DNS challenge provider before enabling this.
+# *.epicglobal.app {
+#     tls {
+#         dns <provider> <credentials>
+#     }
+#     reverse_proxy localhost:3000
+# }

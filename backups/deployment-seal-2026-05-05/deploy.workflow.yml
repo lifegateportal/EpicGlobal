@@ -1,0 +1,45 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Dependencies
+        run: npm install
+
+      # This creates the .env file on the runner using your GitHub Secrets
+      - name: Inject Production Variables
+        run: |
+          echo "VITE_TEST_MESSAGE=${{ secrets.VITE_TEST_MESSAGE }}" >> .env
+          echo "VITE_SOCKET_URL=${{ secrets.VITE_SOCKET_URL }}" >> .env
+          echo "VITE_AUTH_PASSWORD=${{ secrets.VITE_AUTH_PASSWORD }}" >> .env
+
+      - name: Build Vite App
+        run: npm run build
+
+      - name: Deploy to Server via SSH
+        uses: easingthemes/ssh-deploy@main
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE: true
+          SSH_PRIVATE_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          REMOTE_HOST: ${{ secrets.SERVER_IP }}
+          REMOTE_USER: root
+          TARGET: /var/www/myapp/dist/
+          SOURCE: "dist/"
+          ARGS: "-rlgoDzvc -i --delete-after --exclude='.env' --exclude='api_config.json'"
