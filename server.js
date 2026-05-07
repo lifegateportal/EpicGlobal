@@ -30,6 +30,13 @@ const PORT = process.env.PORT || 4000;
 // Blue-green: candidate port offset - each project's canary runs at port + this value
 const CANDIDATE_PORT_OFFSET = 1000;
 const DEFAULT_VAULT_MASTER_KEY = 'epicglobal-dev-master-key-change-me';
+const GITHUB_CLIENT_ID = (process.env.GITHUB_CLIENT_ID || '').trim();
+const GITHUB_CLIENT_SECRET = (process.env.GITHUB_CLIENT_SECRET || '').trim();
+const GITHUB_OAUTH_SCOPES = (process.env.GITHUB_OAUTH_SCOPES || 'repo read:user').trim();
+const GITHUB_OAUTH_REDIRECT_URI = (process.env.GITHUB_OAUTH_REDIRECT_URI || '').trim();
+const GITHUB_TOKEN_COOKIE = 'eg_github_session';
+const GITHUB_STATE_TTL_MS = 10 * 60 * 1000;
+const GITHUB_SESSION_TTL_SECONDS = 8 * 60 * 60;
 
 // Single-worker deploy queue to prevent overlapping deploys on one VPS.
 const deployQueue = [];
@@ -39,6 +46,7 @@ let latestTelemetry = {
   cpu: 0,
   timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
 };
+const githubAuthStates = new Map();
 
 const app = express();
 const server = http.createServer(app);
@@ -126,6 +134,120 @@ app.use((err, req, res, next) => {
 // ---------------------------------------------------------
 function quoteForShell(val) {
   return "'" + String(val).replace(/'/g, "'\\''") + "'";
+}
+
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  String(cookieHeader || '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((pair) => {
+      const idx = pair.indexOf('=');
+      if (idx <= 0) return;
+      const key = pair.slice(0, idx).trim();
+      const value = pair.slice(idx + 1).trim();
+      if (!key) return;
+      cookies[key] = decodeURIComponent(value);
+    });
+  return cookies;
+}
+
+function getGithubSessionSecret() {
+  return String(process.env.GITHUB_SESSION_SECRET || process.env.VAULT_MASTER_KEY || DEFAULT_VAULT_MASTER_KEY);
+}
+
+function encryptGithubToken(token) {
+  const key = crypto.createHash('sha256').update(getGithubSessionSecret()).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(token), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.from(JSON.stringify({
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    data: encrypted.toString('base64')
+  })).toString('base64url');
+}
+
+function decryptGithubToken(blob) {
+  const payload = JSON.parse(Buffer.from(String(blob || ''), 'base64url').toString('utf8'));
+  const key = crypto.createHash('sha256').update(getGithubSessionSecret()).digest();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(payload.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(payload.data, 'base64')),
+    decipher.final()
+  ]);
+  return decrypted.toString('utf8');
+}
+
+function getGithubTokenFromRequest(req) {
+  try {
+    const cookies = parseCookies(req.headers.cookie || '');
+    const enc = cookies[GITHUB_TOKEN_COOKIE];
+    if (!enc) return '';
+    return decryptGithubToken(enc);
+  } catch {
+    return '';
+  }
+}
+
+function buildGithubSessionCookie(req, encryptedToken, maxAgeSeconds = GITHUB_SESSION_TTL_SECONDS) {
+  const forwardedProto = (req.headers['x-forwarded-proto'] || '').toString().toLowerCase();
+  const secure = process.env.NODE_ENV === 'production' || forwardedProto === 'https';
+  return [
+    GITHUB_TOKEN_COOKIE + '=' + encodeURIComponent(encryptedToken),
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=' + maxAgeSeconds,
+    secure ? 'Secure' : ''
+  ].filter(Boolean).join('; ');
+}
+
+function clearGithubSessionCookie(req) {
+  const forwardedProto = (req.headers['x-forwarded-proto'] || '').toString().toLowerCase();
+  const secure = process.env.NODE_ENV === 'production' || forwardedProto === 'https';
+  return [
+    GITHUB_TOKEN_COOKIE + '=;',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+    secure ? 'Secure' : ''
+  ].filter(Boolean).join('; ');
+}
+
+function githubOAuthEnabled() {
+  return Boolean(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET && GITHUB_OAUTH_REDIRECT_URI);
+}
+
+function sanitizeOAuthReturnTo(value) {
+  const fallback = 'https://epicglobal.app';
+  if (!value) return fallback;
+  try {
+    const candidate = new URL(String(value));
+    const allowed = new Set([
+      'https://epicglobal.app',
+      'https://www.epicglobal.app',
+      'http://localhost:5173'
+    ]);
+    if (/^https:\/\/.*\.app\.github\.dev$/i.test(candidate.origin)) return candidate.toString();
+    if (/^https:\/\/.*\.pages\.dev$/i.test(candidate.origin)) return candidate.toString();
+    if (allowed.has(candidate.origin)) return candidate.toString();
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+function buildGitCloneCommand(repoUrl, targetPath, gitToken) {
+  if (!gitToken) {
+    return 'git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(targetPath);
+  }
+  const authHeaderConfig = 'http.extraHeader=Authorization: Bearer ' + gitToken;
+  return 'git -c ' + quoteForShell(authHeaderConfig) + ' clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(targetPath);
 }
 
 function normalizeProjectName(val) {
@@ -426,13 +548,13 @@ async function probeHealth(port, retries, delayMs) {
 
 // Build and start a candidate PM2 process for a project.
 // Returns { stdout, stderr, candidateName, candidatePath }.
-async function buildCandidate(projectName, repoUrl, candidatePort) {
+async function buildCandidate(projectName, repoUrl, candidatePort, gitToken) {
   const candidateName = projectName + '-candidate';
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(candidatePath) +
-    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
+    ' && ' + buildGitCloneCommand(repoUrl, candidatePath, gitToken) +
     ' && cd ' + quoteForShell(candidatePath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
@@ -476,12 +598,12 @@ async function rollbackCandidate(candidateName, candidatePath) {
 // ---------------------------------------------------------
 // DEPLOY LOGIC: First deploy (no existing project)
 // ---------------------------------------------------------
-async function executeFirstDeploy(projectName, repoUrl, domain, port) {
+async function executeFirstDeploy(projectName, repoUrl, domain, port, gitToken) {
   const deployPath = path.join(DEPLOY_ROOT, projectName);
 
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(deployPath) +
-    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath) +
+    ' && ' + buildGitCloneCommand(repoUrl, deployPath, gitToken) +
     ' && cd ' + quoteForShell(deployPath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
@@ -500,6 +622,7 @@ async function executeOrchestratorDeploy(payload) {
   const repoUrl = payload.repoUrl;
   const projectName = payload.projectName;
   const domain = payload.domain;
+  const gitToken = payload.gitToken || '';
 
   const registry = getRegistry();
   const existingProject = registry.projects[projectName];
@@ -528,7 +651,7 @@ async function executeOrchestratorDeploy(payload) {
 
       let buildResult;
       try {
-        buildResult = await buildCandidate(projectName, repoUrl, candidatePort);
+        buildResult = await buildCandidate(projectName, repoUrl, candidatePort, gitToken);
       } catch (buildError) {
         const errOut = [buildError.stdout, buildError.stderr, buildError.message].filter(Boolean).join('\n').trim();
         appendHistory(projectName, 'failed', {
@@ -579,7 +702,7 @@ async function executeOrchestratorDeploy(payload) {
 
     } else {
       // ---- FIRST-DEPLOY PATH ----
-      output = await executeFirstDeploy(projectName, repoUrl, domain, port);
+      output = await executeFirstDeploy(projectName, repoUrl, domain, port, gitToken);
 
       // Health probe — give the serve process up to 15s to start responding.
       const healthy = await probeHealth(port, 5, 3000);
@@ -784,6 +907,9 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
   const repoUrl = String(req.body?.repoUrl || '').trim();
   const projectName = normalizeProjectName(req.body?.projectName);
   const domain = normalizeDomain(req.body?.domain);
+  const accessToken = String(req.body?.accessToken || '').trim();
+  const sessionGithubToken = getGithubTokenFromRequest(req);
+  const gitToken = accessToken || sessionGithubToken;
 
   if (!projectName) {
     return res.status(400).json({
@@ -806,6 +932,14 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
     });
   }
 
+  const isGithubRepo = /^https:\/\/github\.com\/.+/i.test(repoUrl);
+  if (!isGithubRepo && gitToken) {
+    return res.status(400).json({
+      success: false,
+      error: 'GitHub token auth can only be used with github.com repository URLs.'
+    });
+  }
+
   if (isProjectBusy(projectName)) {
     return res.status(409).json({
       success: false,
@@ -814,7 +948,7 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
   }
 
   try {
-    const result = await enqueueDeploy({ projectName, repoUrl, domain });
+    const result = await enqueueDeploy({ projectName, repoUrl, domain, gitToken });
     return res.json(result);
   } catch (error) {
     const statusCode = error?.statusCode || 500;
@@ -826,6 +960,129 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
     return res.status(statusCode).json(body);
   }
 });
+
+// ---------------------------------------------------------
+// API: GitHub OAuth (for private repo deploy ergonomics)
+// ---------------------------------------------------------
+app.get('/api/auth/github/config', (req, res) => {
+  res.json({
+    success: true,
+    enabled: githubOAuthEnabled(),
+    scopes: GITHUB_OAUTH_SCOPES
+  });
+});
+
+app.get('/api/auth/github/login', (req, res) => {
+  if (!githubOAuthEnabled()) {
+    return res.status(503).json({
+      success: false,
+      error: 'GitHub OAuth is not configured on this server.'
+    });
+  }
+
+  const state = crypto.randomBytes(24).toString('hex');
+  const returnTo = sanitizeOAuthReturnTo(String(req.query.returnTo || req.headers.origin || 'https://epicglobal.app'));
+  githubAuthStates.set(state, { returnTo, expiresAt: Date.now() + GITHUB_STATE_TTL_MS });
+
+  const authUrl = new URL('https://github.com/login/oauth/authorize');
+  authUrl.searchParams.set('client_id', GITHUB_CLIENT_ID);
+  authUrl.searchParams.set('redirect_uri', GITHUB_OAUTH_REDIRECT_URI);
+  authUrl.searchParams.set('scope', GITHUB_OAUTH_SCOPES);
+  authUrl.searchParams.set('state', state);
+
+  return res.redirect(authUrl.toString());
+});
+
+app.get('/api/auth/github/callback', async (req, res) => {
+  const code = String(req.query.code || '');
+  const state = String(req.query.state || '');
+  const stateData = githubAuthStates.get(state);
+  githubAuthStates.delete(state);
+
+  if (!stateData || stateData.expiresAt < Date.now()) {
+    return res.status(400).send('Invalid or expired GitHub OAuth state.');
+  }
+
+  if (!code || !githubOAuthEnabled()) {
+    return res.status(400).send('Missing OAuth code or GitHub OAuth is not configured.');
+  }
+
+  try {
+    const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code: code,
+        redirect_uri: GITHUB_OAUTH_REDIRECT_URI,
+        state: state
+      })
+    });
+
+    const tokenData = await tokenResponse.json();
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      return res.status(401).send('GitHub token exchange failed.');
+    }
+
+    const cookieValue = encryptGithubToken(tokenData.access_token);
+    res.setHeader('Set-Cookie', buildGithubSessionCookie(req, cookieValue));
+    return res.redirect(stateData.returnTo || 'https://epicglobal.app');
+  } catch {
+    return res.status(500).send('GitHub OAuth callback failed.');
+  }
+});
+
+app.get('/api/auth/github/session', async (req, res) => {
+  const token = getGithubTokenFromRequest(req);
+  if (!token) {
+    return res.json({ success: true, authenticated: false, enabled: githubOAuthEnabled() });
+  }
+
+  try {
+    const userRes = await fetch('https://api.github.com/user', {
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': 'Bearer ' + token,
+        'User-Agent': 'epicglobal-orchestrator'
+      }
+    });
+
+    if (!userRes.ok) {
+      res.setHeader('Set-Cookie', clearGithubSessionCookie(req));
+      return res.json({ success: true, authenticated: false, enabled: githubOAuthEnabled() });
+    }
+
+    const user = await userRes.json();
+    return res.json({
+      success: true,
+      authenticated: true,
+      enabled: githubOAuthEnabled(),
+      user: {
+        login: user.login,
+        name: user.name,
+        avatarUrl: user.avatar_url
+      }
+    });
+  } catch {
+    return res.status(500).json({ success: false, error: 'Could not verify GitHub session.' });
+  }
+});
+
+app.post('/api/auth/github/logout', (req, res) => {
+  res.setHeader('Set-Cookie', clearGithubSessionCookie(req));
+  return res.json({ success: true, authenticated: false });
+});
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [state, data] of githubAuthStates.entries()) {
+    if (data.expiresAt < now) githubAuthStates.delete(state);
+  }
+}, 60 * 1000);
 
 // ---------------------------------------------------------
 // API: Deploy Queue Snapshot

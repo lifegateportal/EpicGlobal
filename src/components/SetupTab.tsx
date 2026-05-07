@@ -1,11 +1,19 @@
-import { useState, useRef, type FormEvent, type ChangeEvent } from 'react';
+import { useEffect, useState, useRef, type FormEvent, type ChangeEvent } from 'react';
 import {
   GitBranch, Upload, Zap, ArrowRight, ArrowLeft,
   CheckCircle2, XCircle, Loader2, ExternalLink, Copy, Check,
-  Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X, ChevronRight
+  Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X, ChevronRight, LogIn, LogOut
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { API, getOrchestratorApiKey, apiFetch } from '../api/client';
+import {
+  API,
+  getOrchestratorApiKey,
+  apiFetch,
+  getGithubAuthSession,
+  startGithubLogin,
+  logoutGithub,
+  type GithubAuthSession,
+} from '../api/client';
 
 /* ─── types ─────────────────────────────────────────────────────── */
 type Source = 'github' | 'epicodespaces' | 'git' | 'upload';
@@ -99,6 +107,17 @@ export function SetupTab() {
   const [deployState, setDeployState] = useState<DeployState>({ phase: 'idle' });
   const [logLines, setLogLines]         = useState('');
   const logRef = useRef<HTMLPreElement>(null);
+  const [githubSession, setGithubSession] = useState<GithubAuthSession>({ enabled: false, authenticated: false });
+  const [githubSessionLoading, setGithubSessionLoading] = useState(false);
+
+  useEffect(() => {
+    if (source !== 'github') return;
+    setGithubSessionLoading(true);
+    getGithubAuthSession()
+      .then(setGithubSession)
+      .catch(() => setGithubSession({ enabled: false, authenticated: false }))
+      .finally(() => setGithubSessionLoading(false));
+  }, [source]);
 
   /* ── helpers ── */
   const autoSlug = (url: string) => {
@@ -190,6 +209,16 @@ export function SetupTab() {
     setRepoUrl(''); setProjectName(''); setDomain(''); setCustomDomain(false); setAccessToken('');
     setEnvRows([]); setUploadFile(null); setLogLines('');
     setDeployState({ phase: 'idle' });
+  };
+
+  const handleGithubLogout = async () => {
+    const ok = await logoutGithub();
+    if (ok) {
+      setGithubSession((prev) => ({ ...prev, authenticated: false, user: undefined }));
+      toast.success('Signed out from GitHub session.');
+    } else {
+      toast.error('Could not sign out from GitHub session.');
+    }
   };
 
   /* ────────────────── render ────────────────────────────────────── */
@@ -310,6 +339,42 @@ export function SetupTab() {
             </div>
           ) : (
             <div className="space-y-2">
+              {source === 'github' && (
+                <div className="border border-zinc-800 bg-zinc-950/50 rounded-lg p-3.5 mb-3 space-y-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">GitHub account</p>
+                      {githubSessionLoading ? (
+                        <p className="text-sm text-zinc-400 mt-0.5">Checking session…</p>
+                      ) : githubSession.authenticated ? (
+                        <p className="text-sm text-emerald-300 mt-0.5">Signed in as @{githubSession.user?.login}</p>
+                      ) : githubSession.enabled ? (
+                        <p className="text-sm text-zinc-400 mt-0.5">Sign in to deploy private repositories without pasting a PAT.</p>
+                      ) : (
+                        <p className="text-sm text-amber-400 mt-0.5">GitHub OAuth is not configured on this server yet.</p>
+                      )}
+                    </div>
+                    {githubSession.authenticated ? (
+                      <button
+                        type="button"
+                        onClick={handleGithubLogout}
+                        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-zinc-700 text-zinc-300 hover:text-zinc-100 hover:border-zinc-500 transition-colors"
+                      >
+                        <LogOut size={12} /> Sign out
+                      </button>
+                    ) : githubSession.enabled ? (
+                      <button
+                        type="button"
+                        onClick={() => startGithubLogin(window.location.href)}
+                        className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-emerald-700/70 text-emerald-300 hover:text-emerald-200 hover:border-emerald-500 transition-colors"
+                      >
+                        <LogIn size={12} /> Sign in
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+
               <label className="text-xs text-zinc-400 font-medium">
                 {source === 'github' ? 'GitHub repo URL *' : 'Git remote URL *'}
               </label>

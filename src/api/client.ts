@@ -55,14 +55,56 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
 export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const key = getOrchestratorApiKey();
   const isOrchestrator = input.includes('/api/orchestrator');
-  if (!isOrchestrator || !key) return fetch(input, init);
+  const baseInit: RequestInit = { ...init, credentials: init?.credentials || 'include' };
+  if (!isOrchestrator || !key) return fetch(input, baseInit);
   const existingHeaders = init?.headers
     ? (init.headers instanceof Headers
         ? Object.fromEntries((init.headers as Headers).entries())
         : (init.headers as Record<string, string>))
     : {};
   return fetch(input, {
-    ...init,
+    ...baseInit,
     headers: { 'x-api-key': key, ...existingHeaders },
   });
+}
+
+export type GithubAuthSession = {
+  enabled: boolean;
+  authenticated: boolean;
+  user?: {
+    login: string;
+    name?: string;
+    avatarUrl?: string;
+  };
+};
+
+export async function getGithubAuthSession(): Promise<GithubAuthSession> {
+  const res = await apiFetch(`${API}/api/auth/github/session`, { cache: 'no-store' });
+  const data = await res.json();
+  if (!res.ok || !data?.success) {
+    return { enabled: false, authenticated: false };
+  }
+  return {
+    enabled: Boolean(data.enabled),
+    authenticated: Boolean(data.authenticated),
+    user: data.user,
+  };
+}
+
+export async function getGithubAuthConfig(): Promise<{ enabled: boolean }> {
+  const res = await apiFetch(`${API}/api/auth/github/config`, { cache: 'no-store' });
+  const data = await res.json();
+  return { enabled: Boolean(res.ok && data?.success && data?.enabled) };
+}
+
+export function startGithubLogin(returnTo?: string): void {
+  const target = returnTo || window.location.href;
+  const loginUrl = `${API}/api/auth/github/login?returnTo=${encodeURIComponent(target)}`;
+  window.location.href = loginUrl;
+}
+
+export async function logoutGithub(): Promise<boolean> {
+  const res = await apiFetch(`${API}/api/auth/github/logout`, { method: 'POST' });
+  const data = await res.json();
+  return Boolean(res.ok && data?.success);
 }
