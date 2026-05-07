@@ -253,6 +253,16 @@ function buildGitCloneCommand(repoUrl, targetPath, gitToken) {
   return 'git -c ' + quoteForShell(authHeaderConfig) + ' clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(targetPath);
 }
 
+function explainCloneFailure(errText, repoUrl, hasGitToken) {
+  const text = String(errText || '');
+  const isGithubRepo = /^https:\/\/github\.com\//i.test(String(repoUrl || ''));
+  const looksLikeAuthIssue = /could not read Username for 'https:\/\/github\.com'|Authentication failed|Repository not found/i.test(text);
+  if (isGithubRepo && looksLikeAuthIssue && !hasGitToken) {
+    return text + '\n\nClone failed before build started. Build stages were skipped.\nFix: Sign in with GitHub in New Deploy/Settings or provide a GitHub access token for private repositories.';
+  }
+  return text;
+}
+
 function normalizeProjectName(val) {
   return String(val || '')
     .trim()
@@ -614,6 +624,7 @@ async function buildCandidate(projectName, repoUrl, candidatePort, gitToken, dep
   const candidateName = projectName + '-candidate';
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
+  if (deploymentId) addDeploymentLog(deploymentId, `  → cloning candidate repository...`);
   if (deploymentId) addDeploymentLog(deploymentId, `  → npm install, build, and PM2 start...`);
 
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
@@ -632,9 +643,15 @@ async function buildCandidate(projectName, repoUrl, candidatePort, gitToken, dep
     const { stdout, stderr } = await execPromise(cmd);
     return { stdout, stderr, candidateName, candidatePath };
   } catch (error) {
-    if (deploymentId && error.stderr) {
-      addDeploymentLog(deploymentId, `Build error output:\n${error.stderr}`);
+    const rawErr = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
+    const explainedErr = explainCloneFailure(rawErr, repoUrl, Boolean(gitToken));
+    if (deploymentId) {
+      addDeploymentLog(deploymentId, `Build error output:\n${explainedErr}`);
+      if (explainedErr !== rawErr) {
+        addDeploymentLog(deploymentId, 'Update pipeline stopped before npm install/build because clone failed.');
+      }
     }
+    error.message = explainedErr || error.message;
     throw error;
   }
 }
@@ -673,6 +690,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port, gitToken, 
   const deployPath = path.join(DEPLOY_ROOT, projectName);
 
   if (deploymentId) addDeploymentLog(deploymentId, `  → cloning git repository...`);
+  if (deploymentId) addDeploymentLog(deploymentId, `  → next: npm install -> npm run build -> pm2 start`);
 
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(deployPath) +
@@ -693,9 +711,15 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port, gitToken, 
     if (deploymentId) addDeploymentLog(deploymentId, fullOutput);
     return fullOutput;
   } catch (error) {
-    if (deploymentId && error.stderr) {
-      addDeploymentLog(deploymentId, `First deploy error:\n${error.stderr}`);
+    const rawErr = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
+    const explainedErr = explainCloneFailure(rawErr, repoUrl, Boolean(gitToken));
+    if (deploymentId) {
+      addDeploymentLog(deploymentId, `First deploy error:\n${explainedErr}`);
+      if (explainedErr !== rawErr) {
+        addDeploymentLog(deploymentId, 'Build step did not run because clone failed.');
+      }
     }
+    error.message = explainedErr || error.message;
     throw error;
   }
 }
