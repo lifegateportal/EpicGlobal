@@ -14,6 +14,8 @@ import BackendManager from './components/BackendManager';
 import { useTelemetry } from './hooks/useTelemetry';
 
 const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
+const ACTIVE_TAB_KEY = 'eg_active_tab';
+const VALID_TABS = new Set(['overview', 'deployments', 'edge', 'setup', 'orchestrator', 'settings']);
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -21,7 +23,10 @@ export default function App() {
   });
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(() => {
+    const savedTab = localStorage.getItem(ACTIVE_TAB_KEY) || '';
+    return VALID_TABS.has(savedTab) ? savedTab : 'setup';
+  });
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -49,6 +54,13 @@ export default function App() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Persist tab selection so refresh/login returns users to their last page.
+  useEffect(() => {
+    if (VALID_TABS.has(activeTab)) {
+      localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+    }
+  }, [activeTab]);
 
   // Updated Keyboard Shortcuts to include the new Orchestrator tab
   useEffect(() => {
