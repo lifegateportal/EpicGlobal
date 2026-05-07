@@ -5,10 +5,8 @@ import {
   Globe, KeyRound, Link2, FileCode2, RefreshCw, Plus, X, ChevronRight, LogIn, LogOut
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { io } from 'socket.io-client';
 import {
   API,
-  BASE_URL,
   getOrchestratorApiKey,
   apiFetch,
   getGithubAuthSession,
@@ -109,7 +107,6 @@ export function SetupTab() {
   const [deployState, setDeployState] = useState<DeployState>({ phase: 'idle' });
   const [logLines, setLogLines]         = useState('');
   const logRef = useRef<HTMLPreElement>(null);
-  const [deploymentId, setDeploymentId] = useState<string | null>(null);
   const [githubSession, setGithubSession] = useState<GithubAuthSession>({ enabled: false, authenticated: false });
   const [githubSessionLoading, setGithubSessionLoading] = useState(false);
 
@@ -121,30 +118,6 @@ export function SetupTab() {
       .catch(() => setGithubSession({ enabled: false, authenticated: false }))
       .finally(() => setGithubSessionLoading(false));
   }, [source]);
-
-  // Listen for real-time deployment logs via Socket.IO
-  useEffect(() => {
-    if (!deploymentId) return;
-
-    const socket = io(BASE_URL, {
-      transports: ['websocket', 'polling'],
-      timeout: 10000,
-    });
-
-    socket.on('deployment_log', (event: { deploymentId: string; message: string }) => {
-      if (event.deploymentId === deploymentId) {
-        setLogLines(prev => prev + (prev ? '\n' : '') + event.message);
-        // Auto-scroll to bottom
-        setTimeout(() => {
-          if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-        }, 0);
-      }
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [deploymentId]);
 
   /* ── helpers ── */
   const autoSlug = (url: string) => {
@@ -181,11 +154,10 @@ export function SetupTab() {
     }
 
     setDeployState({ phase: 'deploying' });
-    setLogLines('Initializing deployment…\n');
-    setDeploymentId(null);
+    setLogLines('Connecting to Orchestrator…\n');
 
     try {
-      let data: { success?: boolean; deploymentId?: string; url?: string; log?: string; terminalOutput?: string; error?: string; queued?: boolean };
+      let data: { success: boolean; url?: string; log?: string; terminalOutput?: string; error?: string };
 
       if (source === 'upload') {
         if (!uploadFile) { toast.error('Select a file.'); setDeployState({ phase: 'idle' }); return; }
@@ -212,71 +184,6 @@ export function SetupTab() {
         data = await res.json();
       }
 
-      // New format: deployment is queued with deploymentId
-      if (data.deploymentId && data.queued) {
-        setDeploymentId(data.deploymentId);
-        setLogLines('✓ Deployment queued. Monitoring logs in real-time…\n');
-        toast.info('Deployment queued - monitoring progress');
-        
-        // Poll for deployment completion
-        const checkDeployment = async () => {
-          let isComplete = false;
-          let retries = 0;
-          const maxRetries = 600; // 10 minutes with 1s checks
-          
-          while (!isComplete && retries < maxRetries) {
-            await new Promise(r => setTimeout(r, 1000));
-            retries++;
-            
-            try {
-              const logRes = await apiFetch(`${API}/api/deployment-logs/${data.deploymentId}`);
-              const logData = await logRes.json();
-              const logs = logData.logs || '';
-              
-              // Check if deployment is complete based on log content
-              if (logs.includes('✓ Deployment successful') || logs.includes('✗ Deployment')) {
-                isComplete = true;
-                
-                // Determine success/failure from logs
-                if (logs.includes('✗ Deployment')) {
-                  setDeployState({ 
-                    phase: 'error', 
-                    message: 'Deployment failed - see logs for details', 
-                    log: logs 
-                  });
-                  toast.error('Deployment failed');
-                } else if (logs.includes('✓ Deployment successful')) {
-                  const urlMatch = logs.match(/Live at: (https?:\/\/[^\s]+)/);
-                  const url = urlMatch ? urlMatch[1] : `https://${domain || slugify(projectName) + '.epicglobal.app'}`;
-                  setDeployState({ 
-                    phase: 'success', 
-                    url, 
-                    log: logs 
-                  });
-                  toast.success(`${projectName} deployed successfully!`);
-                }
-              }
-            } catch (err) {
-              console.warn('Failed to check deployment status:', err);
-            }
-          }
-          
-          if (!isComplete) {
-            setDeployState({ 
-              phase: 'error', 
-              message: 'Deployment timeout - check server status', 
-              log: logLines 
-            });
-            toast.error('Deployment timed out');
-          }
-        };
-        
-        // Start polling in background
-        checkDeployment().catch(console.error);
-        return;
-      }
-
-      // Legacy format handling (for upload deployments)
       const log = String(data.terminalOutput || data.log || '').trim();
       setLogLines(log);
       if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;

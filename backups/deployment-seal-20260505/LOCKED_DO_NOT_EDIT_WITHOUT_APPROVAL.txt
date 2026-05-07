@@ -1,3 +1,0 @@
-DEPLOYMENT SEALED
-Date (UTC): 2026-05-05
-Rule: Do not modify this deployment without explicit owner approval.

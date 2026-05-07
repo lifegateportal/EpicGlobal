@@ -4,7 +4,7 @@ try { require('dotenv').config({ path: require('path').join(__dirname, '.env'), 
 
 const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
+const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -47,9 +47,6 @@ let latestTelemetry = {
   timestamp: new Date().toLocaleTimeString('en-GB', { hour12: false })
 };
 const githubAuthStates = new Map();
-
-// Real-time deployment logging
-const deploymentLogs = new Map(); // deploymentId -> { logs: string[], projectName: string }
 
 const app = express();
 const server = http.createServer(app);
@@ -478,69 +475,19 @@ function isProjectBusy(projectName) {
   return deployQueue.some((item) => item.payload.projectName === projectName);
 }
 
-// ---------------------------------------------------------
-// DEPLOYMENT LOGGING: Real-time log capture and streaming
-// ---------------------------------------------------------
-
-function initDeploymentLog(deploymentId, projectName) {
-  deploymentLogs.set(deploymentId, {
-    projectName,
-    logs: []
-  });
-}
-
-function addDeploymentLog(deploymentId, message) {
-  if (!deploymentLogs.has(deploymentId)) {
-    console.warn('Deployment log buffer not found:', deploymentId);
-    return;
-  }
-  
-  const entry = deploymentLogs.get(deploymentId);
-  entry.logs.push(message);
-  
-  // Emit to all connected clients
-  if (io) {
-    io.emit('deployment_log', {
-      deploymentId,
-      projectName: entry.projectName,
-      message,
-      timestamp: new Date().toISOString()
-    });
-  }
-}
-
-function getDeploymentLog(deploymentId) {
-  const entry = deploymentLogs.get(deploymentId);
-  return entry ? entry.logs.join('\n') : '';
-}
-
-function clearDeploymentLog(deploymentId) {
-  deploymentLogs.delete(deploymentId);
-}
-
 function enqueueDeploy(payload) {
-  const item = {
-    id: Date.now().toString() + '-' + Math.random().toString(16).slice(2, 8),
-    payload,
-    enqueuedAt: new Date().toISOString(),
-    resolve: null,
-    reject: null
-  };
-  
-  const promise = new Promise((resolve, reject) => {
-    item.resolve = resolve;
-    item.reject = reject;
+  return new Promise((resolve, reject) => {
+    const item = {
+      id: Date.now().toString() + '-' + Math.random().toString(16).slice(2, 8),
+      payload,
+      enqueuedAt: new Date().toISOString(),
+      resolve,
+      reject
+    };
+    deployQueue.push(item);
+    emitQueueStatus();
+    processDeployQueue();
   });
-  
-  deployQueue.push(item);
-  emitQueueStatus();
-  processDeployQueue();
-  
-  // Return immediately with deployment ID and a promise for the result
-  return {
-    deploymentId: item.id,
-    promise
-  };
 }
 
 async function processDeployQueue() {
@@ -554,25 +501,16 @@ async function processDeployQueue() {
     projectName: next.payload.projectName,
     startedAt: new Date().toISOString()
   };
-  
-  // Initialize deployment log buffer
-  initDeploymentLog(next.id, next.payload.projectName);
-  addDeploymentLog(next.id, `Starting deployment for: ${next.payload.projectName}`);
-  
   emitQueueStatus();
 
   try {
-    const result = await executeOrchestratorDeploy(next.payload, next.id);
-    addDeploymentLog(next.id, '✓ Deployment completed successfully');
+    const result = await executeOrchestratorDeploy(next.payload);
     next.resolve(result);
   } catch (error) {
-    addDeploymentLog(next.id, `✗ Deployment failed: ${error.message || JSON.stringify(error)}`);
     next.reject(error);
   } finally {
     activeDeploy = null;
     emitQueueStatus();
-    // Keep logs for 1 hour then clean up
-    setTimeout(() => clearDeploymentLog(next.id), 60 * 60 * 1000);
     processDeployQueue();
   }
 }
@@ -610,11 +548,9 @@ async function probeHealth(port, retries, delayMs) {
 
 // Build and start a candidate PM2 process for a project.
 // Returns { stdout, stderr, candidateName, candidatePath }.
-async function buildCandidate(projectName, repoUrl, candidatePort, gitToken, deploymentId) {
+async function buildCandidate(projectName, repoUrl, candidatePort, gitToken) {
   const candidateName = projectName + '-candidate';
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
-
-  if (deploymentId) addDeploymentLog(deploymentId, `  → npm install, build, and PM2 start...`);
 
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(candidatePath) +
@@ -628,15 +564,8 @@ async function buildCandidate(projectName, repoUrl, candidatePort, gitToken, dep
     '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; fi' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
-  try {
-    const { stdout, stderr } = await execPromise(cmd);
-    return { stdout, stderr, candidateName, candidatePath };
-  } catch (error) {
-    if (deploymentId && error.stderr) {
-      addDeploymentLog(deploymentId, `Build error output:\n${error.stderr}`);
-    }
-    throw error;
-  }
+  const { stdout, stderr } = await execPromise(cmd);
+  return { stdout, stderr, candidateName, candidatePath };
 }
 
 // Promote candidate: stop old PM2 app, move files, restart under stable name.
@@ -669,10 +598,8 @@ async function rollbackCandidate(candidateName, candidatePath) {
 // ---------------------------------------------------------
 // DEPLOY LOGIC: First deploy (no existing project)
 // ---------------------------------------------------------
-async function executeFirstDeploy(projectName, repoUrl, domain, port, gitToken, deploymentId) {
+async function executeFirstDeploy(projectName, repoUrl, domain, port, gitToken) {
   const deployPath = path.join(DEPLOY_ROOT, projectName);
-
-  if (deploymentId) addDeploymentLog(deploymentId, `  → cloning git repository...`);
 
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(deployPath) +
@@ -687,28 +614,15 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port, gitToken, 
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
-  try {
-    const { stdout, stderr } = await execPromise(cmd);
-    const fullOutput = [stdout, stderr].filter(Boolean).join('\n').trim();
-    if (deploymentId) addDeploymentLog(deploymentId, fullOutput);
-    return fullOutput;
-  } catch (error) {
-    if (deploymentId && error.stderr) {
-      addDeploymentLog(deploymentId, `First deploy error:\n${error.stderr}`);
-    }
-    throw error;
-  }
+  const { stdout, stderr } = await execPromise(cmd);
+  return [stdout, stderr].filter(Boolean).join('\n').trim();
 }
 
-async function executeOrchestratorDeploy(payload, deploymentId) {
+async function executeOrchestratorDeploy(payload) {
   const repoUrl = payload.repoUrl;
   const projectName = payload.projectName;
   const domain = payload.domain;
   const gitToken = payload.gitToken || '';
-
-  addDeploymentLog(deploymentId, `Project: ${projectName}`);
-  addDeploymentLog(deploymentId, `Repository: ${repoUrl}`);
-  addDeploymentLog(deploymentId, `Domain: ${domain || projectName + '.epicglobal.app'}`);
 
   const registry = getRegistry();
   const existingProject = registry.projects[projectName];
@@ -729,23 +643,17 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
 
   try {
     let output = '';
-    
-    addDeploymentLog(deploymentId, `Target port: ${port}`);
 
     if (existingProject) {
-      addDeploymentLog(deploymentId, '\n=== BLUE-GREEN UPDATE ===');
       // ---- BLUE-GREEN PATH (project already exists) ----
       const candidatePort = port + CANDIDATE_PORT_OFFSET;
       const logPrefix = '[blue-green] ' + projectName + ' candidate on port ' + candidatePort + ' -> ';
 
-      addDeploymentLog(deploymentId, `Building candidate on port ${candidatePort}...`);
-
       let buildResult;
       try {
-        buildResult = await buildCandidate(projectName, repoUrl, candidatePort, gitToken, deploymentId);
+        buildResult = await buildCandidate(projectName, repoUrl, candidatePort, gitToken);
       } catch (buildError) {
         const errOut = [buildError.stdout, buildError.stderr, buildError.message].filter(Boolean).join('\n').trim();
-        addDeploymentLog(deploymentId, `✗ Build failed: ${errOut}`);
         appendHistory(projectName, 'failed', {
           error: errOut,
           repoUrl: repoUrl,
@@ -764,16 +672,13 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
       }
 
       output = [buildResult.stdout, buildResult.stderr].filter(Boolean).join('\n').trim();
-      addDeploymentLog(deploymentId, `Build output:\n${output}`);
 
       // Health probe — 5 attempts, 3s apart
-      addDeploymentLog(deploymentId, `Checking health on port ${candidatePort}...`);
       const healthy = await probeHealth(candidatePort, 5, 3000);
 
       if (!healthy) {
         await rollbackCandidate(buildResult.candidateName, buildResult.candidatePath);
         const errMsg = logPrefix + 'health check FAILED. Old version kept. No downtime.';
-        addDeploymentLog(deploymentId, `✗ ${errMsg}`);
         appendHistory(projectName, 'failed', {
           error: errMsg,
           repoUrl: repoUrl,
@@ -792,20 +697,14 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
       }
 
       // Promote candidate to stable
-      addDeploymentLog(deploymentId, `Health check passed. Promoting to stable...`);
       await promoteCandidate(projectName, buildResult.candidateName, buildResult.candidatePath, port);
       output += '\n' + logPrefix + 'health OK. Promoted to stable.';
-      addDeploymentLog(deploymentId, `✓ Promoted to stable on port ${port}`);
 
     } else {
-      addDeploymentLog(deploymentId, '\n=== FIRST DEPLOYMENT ===');
       // ---- FIRST-DEPLOY PATH ----
-      addDeploymentLog(deploymentId, `Cloning repository...`);
-      output = await executeFirstDeploy(projectName, repoUrl, domain, port, gitToken, deploymentId);
-      addDeploymentLog(deploymentId, `Clone and build complete`);
+      output = await executeFirstDeploy(projectName, repoUrl, domain, port, gitToken);
 
       // Health probe — give the serve process up to 15s to start responding.
-      addDeploymentLog(deploymentId, `Checking health on port ${port}...`);
       const healthy = await probeHealth(port, 5, 3000);
       if (!healthy) {
         // PM2 started but serve isn't responding — tear down and fail cleanly.
@@ -814,11 +713,8 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
         const registry2 = getRegistry();
         delete registry2.projects[projectName];
         saveRegistry(registry2);
-        const errMsg = 'Process started but did not respond on port ' + port + ' after 15 s.';
-        addDeploymentLog(deploymentId, `✗ ${errMsg}`);
-        addDeploymentLog(deploymentId, `Check that your project has a build step producing dist/ or build/ with index.html`);
         appendHistory(projectName, 'failed', {
-          error: errMsg,
+          error: 'Process started but did not respond on port ' + port + ' after 15 s.',
           repoUrl,
           strategy: 'first-deploy',
           log: compactLog(output)
@@ -834,18 +730,13 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
         };
       }
       output += '\n[health] Service responding on port ' + port + '. Deployment confirmed live.';
-      addDeploymentLog(deploymentId, `✓ Service responding on port ${port}`);
     }
 
-    addDeploymentLog(deploymentId, `\nUpdating Caddy configuration...`);
     const finalRegistry = getRegistry();
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(finalRegistry));
     await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
-    addDeploymentLog(deploymentId, `✓ Caddy reloaded`);
 
     const strategy = existingProject ? 'blue-green' : 'first-deploy';
-    addDeploymentLog(deploymentId, `\n✓ Deployment successful!`);
-    addDeploymentLog(deploymentId, `Live at: ${url}`);
     appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl, strategy: strategy });
     sendAlert('deploy', projectName, 'Deployed successfully. Live at ' + url + ' (strategy: ' + strategy + ')', 'success').catch(() => {});
 
@@ -858,18 +749,17 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
     };
   } catch (error) {
     if (error.statusCode) throw error;
-    const errOutput = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
-    addDeploymentLog(deploymentId, `\n✗ Deployment error:\n${errOutput}`);
-    appendHistory(projectName, 'failed', { error: errOutput, repoUrl: repoUrl, log: compactLog(errOutput) });
-    sendAlert('deploy', projectName, 'Deploy FAILED: ' + (errOutput.slice(0, 200) || 'unknown error'), 'error').catch(() => {});
+    const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
+    appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl, log: compactLog(output) });
+    sendAlert('deploy', projectName, 'Deploy FAILED: ' + (output.slice(0, 200) || 'unknown error'), 'error').catch(() => {});
 
     throw {
       statusCode: 500,
       body: {
         success: false,
         port: port,
-        error: errOutput || 'Deployment failed.',
-        terminalOutput: errOutput || 'Deployment failed.'
+        error: output || 'Deployment failed.',
+        terminalOutput: output || 'Deployment failed.'
       }
     };
   }
@@ -1058,24 +948,8 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
   }
 
   try {
-    const { deploymentId, promise } = await enqueueDeploy({ projectName, repoUrl, domain, gitToken });
-    
-    // Return immediately with deployment ID so frontend can track logs in real-time
-    // The result will be available via the promise and can be polled or caught via events
-    res.json({
-      success: true,
-      deploymentId,
-      queued: true,
-      message: 'Deployment queued. Monitor logs with deployment ID: ' + deploymentId
-    });
-    
-    // Handle the result in the background
-    try {
-      const result = await promise;
-      // Could emit this via Socket.IO if needed
-    } catch (err) {
-      // Promise rejected, but client already got deploymentId to track logs
-    }
+    const result = await enqueueDeploy({ projectName, repoUrl, domain, gitToken });
+    return res.json(result);
   } catch (error) {
     const statusCode = error?.statusCode || 500;
     const body = error?.body || {
@@ -1974,27 +1848,6 @@ app.get('/api/logs/:projectName', async (req, res) => {
       terminalOutput: error.message
     });
   }
-});
-
-// ---------------------------------------------------------
-// API: Get deployment logs by deployment ID
-// ---------------------------------------------------------
-app.get('/api/deployment-logs/:deploymentId', (req, res) => {
-  const deploymentId = req.params.deploymentId;
-  
-  if (!deploymentId) {
-    return res.status(400).json({
-      success: false,
-      error: 'Deployment ID is required.'
-    });
-  }
-  
-  const logs = getDeploymentLog(deploymentId);
-  res.json({
-    success: true,
-    deploymentId,
-    logs
-  });
 });
 
 // ---------------------------------------------------------

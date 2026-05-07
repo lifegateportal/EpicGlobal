@@ -1,5 +1,0 @@
-{
-  "locked": true,
-  "lockedAt": "2026-05-05",
-  "rule": "Do not change deployment infrastructure or production connectivity settings without explicit user approval."
-}
