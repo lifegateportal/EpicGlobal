@@ -1,15 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ApiTopology } from './ApiTopology';
-import { Copy, Eye, EyeOff, Check, Link2, Save, LogIn, LogOut } from 'lucide-react';
-import {
-  API,
-  getOrchestratorApiKey,
-  setOrchestratorApiKey,
-  getGithubAuthSession,
-  startGithubLogin,
-  logoutGithub,
-  type GithubAuthSession,
-} from '../api/client';
+import { Copy, Eye, EyeOff, Check, Link2, Save } from 'lucide-react';
+import { API, getOrchestratorApiKey, setOrchestratorApiKey } from '../api/client';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -32,8 +24,6 @@ export function SettingsTab() {
   const [saved, setSaved] = useState(false);
   const apiUrl = API;
   const activeKey = getOrchestratorApiKey();
-  const [githubSession, setGithubSession] = useState<GithubAuthSession>({ enabled: false, authenticated: false });
-  const [githubSessionLoading, setGithubSessionLoading] = useState(false);
   const maskedKey = activeKey
     ? activeKey.slice(0, 6) + '••••••••••••••••••••••••••' + activeKey.slice(-4)
     : '';
@@ -42,21 +32,6 @@ export function SettingsTab() {
     setOrchestratorApiKey(keyInput);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  };
-
-  useEffect(() => {
-    setGithubSessionLoading(true);
-    getGithubAuthSession()
-      .then(setGithubSession)
-      .catch(() => setGithubSession({ enabled: false, authenticated: false }))
-      .finally(() => setGithubSessionLoading(false));
-  }, []);
-
-  const handleGithubLogout = async () => {
-    const ok = await logoutGithub();
-    if (ok) {
-      setGithubSession((prev) => ({ ...prev, authenticated: false, user: undefined }));
-    }
   };
 
   return (
@@ -72,38 +47,6 @@ export function SettingsTab() {
           </div>
         </div>
         <div className="p-5 space-y-4">
-
-          <div className="space-y-1.5">
-            <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">GitHub Sign-In</label>
-            <div className="flex items-center justify-between gap-3 bg-black border border-zinc-800 rounded-md px-3 py-2.5">
-              <div className="min-w-0">
-                {githubSessionLoading ? (
-                  <p className="text-sm text-zinc-400">Checking GitHub session…</p>
-                ) : githubSession.authenticated ? (
-                  <p className="text-sm text-emerald-300 truncate">Connected as @{githubSession.user?.login}</p>
-                ) : githubSession.enabled ? (
-                  <p className="text-sm text-zinc-400">Not connected. Sign in for private repo deployment.</p>
-                ) : (
-                  <p className="text-sm text-amber-400">OAuth not configured on server.</p>
-                )}
-              </div>
-              {githubSession.authenticated ? (
-                <button
-                  onClick={handleGithubLogout}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold transition-colors"
-                >
-                  <LogOut size={12} /> Sign out
-                </button>
-              ) : githubSession.enabled ? (
-                <button
-                  onClick={() => startGithubLogin(window.location.href)}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold transition-colors"
-                >
-                  <LogIn size={12} /> Sign in
-                </button>
-              ) : null}
-            </div>
-          </div>
 
           {/* API URL */}
           <div className="space-y-1.5">
