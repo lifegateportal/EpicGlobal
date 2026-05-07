@@ -249,7 +249,8 @@ function buildGitCloneCommand(repoUrl, targetPath, gitToken) {
   if (!gitToken) {
     return 'git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(targetPath);
   }
-  const authHeaderConfig = 'http.extraHeader=Authorization: Bearer ' + gitToken;
+  const basicAuth = Buffer.from('x-access-token:' + String(gitToken)).toString('base64');
+  const authHeaderConfig = 'http.extraHeader=Authorization: Basic ' + basicAuth;
   return 'git -c ' + quoteForShell(authHeaderConfig) + ' clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(targetPath);
 }
 
@@ -286,6 +287,74 @@ function validateUrl(url) {
     return ['http:', 'https:'].includes(parsed.protocol);
   } catch {
     return false;
+  }
+}
+
+function parseGithubRepo(repoUrl) {
+  try {
+    const parsed = new URL(String(repoUrl || '').trim());
+    if (parsed.hostname.toLowerCase() !== 'github.com') return null;
+    const parts = parsed.pathname.replace(/^\/+/, '').replace(/\.git$/i, '').split('/').filter(Boolean);
+    if (parts.length < 2) return null;
+    return { owner: parts[0], repo: parts[1] };
+  } catch {
+    return null;
+  }
+}
+
+async function checkGithubRepoAccess(repoUrl, gitToken) {
+  const parsed = parseGithubRepo(repoUrl);
+  if (!parsed) {
+    return { ok: false, statusCode: 400, error: 'Invalid GitHub repository URL.' };
+  }
+
+  const url = 'https://api.github.com/repos/' + encodeURIComponent(parsed.owner) + '/' + encodeURIComponent(parsed.repo);
+  const headers = {
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'epicglobal-orchestrator',
+    ...(gitToken ? { 'Authorization': 'Bearer ' + gitToken } : {})
+  };
+
+  try {
+    const res = await fetch(url, { headers });
+    if (res.ok) {
+      return { ok: true };
+    }
+
+    if (res.status === 404) {
+      if (!gitToken) {
+        return {
+          ok: false,
+          statusCode: 401,
+          error: 'GitHub repository is not publicly accessible. Sign in with GitHub or provide an access token with repo access.'
+        };
+      }
+      return {
+        ok: false,
+        statusCode: 403,
+        error: 'GitHub token cannot access this repository. If this is an organization repo, authorize the OAuth app for the org (SSO) or use a PAT with repo access.'
+      };
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: 'GitHub token is not authorized for this repository. Re-sign in with GitHub or use a PAT with repo access.'
+      };
+    }
+
+    return {
+      ok: false,
+      statusCode: 502,
+      error: 'Could not verify GitHub repository access before deploy. Please retry.'
+    };
+  } catch {
+    return {
+      ok: false,
+      statusCode: 502,
+      error: 'GitHub preflight check failed. Please retry.'
+    };
   }
 }
 
@@ -526,6 +595,17 @@ function getDeploymentLog(deploymentId) {
 
 function clearDeploymentLog(deploymentId) {
   deploymentLogs.delete(deploymentId);
+}
+
+async function getPm2RecentLogs(processName, lines = 120) {
+  try {
+    const { stdout } = await execPromise(
+      'pm2 logs ' + quoteForShell(processName) + ' --nostream --raw --lines ' + Number(lines)
+    );
+    return String(stdout || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 function enqueueDeploy(payload) {
@@ -795,14 +875,23 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
       const healthy = await probeHealth(candidatePort, 5, 3000);
 
       if (!healthy) {
+        const candidateLogs = await getPm2RecentLogs(buildResult.candidateName, 120);
         await rollbackCandidate(buildResult.candidateName, buildResult.candidatePath);
         const errMsg = logPrefix + 'health check FAILED. Old version kept. No downtime.';
+        const hint = 'Candidate did not respond on / within 15s. Verify the app binds to PORT ' + candidatePort + ' and serves a response.';
+        const combined = [errMsg, hint, output, candidateLogs ? ('[candidate pm2 logs]\n' + candidateLogs) : '']
+          .filter(Boolean)
+          .join('\n\n');
         addDeploymentLog(deploymentId, `✗ ${errMsg}`);
+        addDeploymentLog(deploymentId, hint);
+        if (candidateLogs) {
+          addDeploymentLog(deploymentId, '[candidate pm2 logs]\n' + candidateLogs);
+        }
         appendHistory(projectName, 'failed', {
           error: errMsg,
           repoUrl: repoUrl,
           strategy: 'blue-green',
-          log: compactLog(output)
+          log: compactLog(combined)
         });
         throw {
           statusCode: 502,
@@ -810,7 +899,7 @@ async function executeOrchestratorDeploy(payload, deploymentId) {
             success: false,
             port: port,
             error: errMsg,
-            terminalOutput: errMsg
+            terminalOutput: combined
           }
         };
       }
@@ -1072,6 +1161,16 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
       success: false,
       error: 'GitHub token auth can only be used with github.com repository URLs.'
     });
+  }
+
+  if (isGithubRepo) {
+    const accessCheck = await checkGithubRepoAccess(repoUrl, gitToken);
+    if (!accessCheck.ok) {
+      return res.status(accessCheck.statusCode || 403).json({
+        success: false,
+        error: accessCheck.error
+      });
+    }
   }
 
   if (isProjectBusy(projectName)) {
