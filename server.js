@@ -439,7 +439,7 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
     ' && pm2 delete ' + quoteForShell(candidateName) + ' || true' +
     ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
     '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
-    '; elif [ -d .next ]; then pm2 start ' + quoteForShell('npx next start -p ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
+    '; elif [ -d .next ]; then PORT=' + candidatePort + ' pm2 start ' + quoteForShell('npx next start --port ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
     '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; fi' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
@@ -463,7 +463,7 @@ async function promoteCandidate(projectName, candidateName, candidatePath, stabl
 
   const cmd = 'if [ -d ' + quoteForShell(stablePath + '/dist') + ' ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
     '; elif [ -d ' + quoteForShell(stablePath + '/build') + ' ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
-    '; elif [ -d ' + quoteForShell(stablePath + '/.next') + ' ]; then pm2 start ' + quoteForShell('npx next start -p ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
+    '; elif [ -d ' + quoteForShell(stablePath + '/.next') + ' ]; then PORT=' + stablePort + ' pm2 start ' + quoteForShell('npx next start --port ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
     '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; fi';
   await execPromise(cmd);
   await execPromise('pm2 save');
@@ -490,7 +490,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
     ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
     ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
     '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
-    '; elif [ -d .next ]; then pm2 start ' + quoteForShell('npx next start -p ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
+    '; elif [ -d .next ]; then PORT=' + port + ' pm2 start ' + quoteForShell('npx next start --port ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
     '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi' +
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
@@ -553,8 +553,8 @@ async function executeOrchestratorDeploy(payload) {
 
       output = [buildResult.stdout, buildResult.stderr].filter(Boolean).join('\n').trim();
 
-      // Health probe — 5 attempts, 3s apart
-      const healthy = await probeHealth(candidatePort, 5, 3000);
+      // Health probe — 15 attempts, 3s apart (Next.js needs longer to boot)
+      const healthy = await probeHealth(candidatePort, 15, 3000);
 
       if (!healthy) {
         await rollbackCandidate(buildResult.candidateName, buildResult.candidatePath);
