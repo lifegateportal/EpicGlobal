@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Trash2, RefreshCw, FileText, ChevronDown, ChevronUp, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Pencil, ExternalLink, Check, X } from 'lucide-react';
+import { Trash2, RefreshCw, FileText, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Pencil, ExternalLink, Check, X } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
 import { BASE_URL, API, apiFetch } from '../api/client';
@@ -17,7 +17,7 @@ type OrchestratorSubTab = 'projects' | 'queue' | 'secrets' | 'backups' | 'monito
 export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: OrchestratorSubTab }) {
   const [projects, setProjects] = useState<Record<string, Project>>({});
   const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
+
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
