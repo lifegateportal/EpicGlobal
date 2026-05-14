@@ -689,8 +689,9 @@ setInterval(async () => {
     const health = {};
     Object.keys(registry.projects).forEach((name) => {
       const proc = processes.find((p) => p.name === name);
+      const isStatic = registry.projects[name]?.deployType === 'static';
       health[name] = {
-        status: proc ? proc.pm2_env.status : 'stopped',
+        status: proc ? proc.pm2_env.status : (isStatic ? 'online' : 'stopped'),
         uptime: proc ? proc.pm2_env.pm_uptime : null,
         restarts: proc ? proc.pm2_env.restart_time : 0,
         memory: proc ? Math.round(proc.monit.memory / 1024 / 1024) : 0,
@@ -898,10 +899,11 @@ app.get('/api/orchestrator/status', async (req, res) => {
     const projects = {};
     Object.entries(registry.projects).forEach(([name, data]) => {
       const proc = processes.find((p) => p.name === name);
+      const isStatic = data.deployType === 'static';
       projects[name] = {
         ...data,
         health: {
-          status: proc ? proc.pm2_env.status : 'stopped',
+          status: proc ? proc.pm2_env.status : (isStatic ? 'online' : 'stopped'),
           uptime: proc ? proc.pm2_env.pm_uptime : null,
           restarts: proc ? proc.pm2_env.restart_time : 0,
           memory: proc ? Math.round(proc.monit.memory / 1024 / 1024) : 0,
