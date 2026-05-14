@@ -430,9 +430,11 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   const candidateName = projectName + '-candidate';
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
+  const stablePath = path.join(DEPLOY_ROOT, projectName);
   const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(candidatePath) +
     ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
+    ' && if [ -f ' + quoteForShell(stablePath + '/.env') + ' ]; then cp ' + quoteForShell(stablePath + '/.env') + ' ' + quoteForShell(candidatePath + '/.env') + '; fi' +
     ' && cd ' + quoteForShell(candidatePath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
@@ -1926,6 +1928,265 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('Socket disconnected:', socket.id);
   });
+});
+
+// ---------------------------------------------------------
+// DOMAINS & DNS REGISTRY
+// ---------------------------------------------------------
+const DOMAINS_PATH = path.join(process.cwd(), 'domains.json');
+
+/** TLD pricing (USD/year) for common TLDs */
+const TLD_PRICES = {
+  com: 12.98, net: 12.98, org: 14.98, io: 39.00, app: 19.00, dev: 12.00,
+  co: 29.98, me: 17.98, info: 3.98, biz: 9.98, xyz: 3.99, online: 4.99,
+  store: 6.99, tech: 9.99, cloud: 14.99, site: 3.99, life: 4.99, world: 4.99,
+};
+
+const VALID_DNS_TYPES = new Set(['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'CAA']);
+
+function getDomains() {
+  if (!fs.existsSync(DOMAINS_PATH)) return { domains: {} };
+  try { return JSON.parse(fs.readFileSync(DOMAINS_PATH, 'utf8')); } catch { return { domains: {} }; }
+}
+
+function saveDomains(data) {
+  fs.writeFileSync(DOMAINS_PATH, JSON.stringify(data, null, 2));
+}
+
+/** Validate domain string (basic safe chars only) */
+function isValidDomain(d) {
+  return typeof d === 'string' && /^[a-z0-9][a-z0-9.-]{1,250}[a-z0-9]$/i.test(d) && d.includes('.');
+}
+
+/**
+ * Check domain availability via NS/A DNS lookup.
+ * Returns true = likely available, false = taken, null = unknown.
+ */
+async function checkDomainAvailable(domain) {
+  if (!isValidDomain(domain)) return null;
+  try {
+    const { stdout } = await execPromise(
+      'dig +short NS ' + quoteForShell(domain) + ' 2>/dev/null || true',
+      { timeout: 6000 }
+    );
+    // If NS records exist, domain is registered (taken)
+    return stdout.trim().length === 0;
+  } catch {
+    return null;
+  }
+}
+
+// GET /api/orchestrator/domains — list all domains
+app.get('/api/orchestrator/domains', (req, res) => {
+  const data = getDomains();
+  res.json({ success: true, domains: data.domains });
+});
+
+// POST /api/orchestrator/domains/check — availability search across TLDs
+app.post('/api/orchestrator/domains/check', async (req, res) => {
+  const raw = String(req.body?.name || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+  if (!raw) return res.status(400).json({ success: false, error: 'name required' });
+
+  const data       = getDomains();
+  const hasTld     = raw.includes('.');
+  const tlds       = hasTld ? [raw.split('.').slice(1).join('.')] : ['com', 'net', 'org', 'io', 'app', 'dev', 'co'];
+  const searchName = hasTld ? raw.split('.')[0] : raw;
+
+  const checks = tlds.map(async (tld) => {
+    const fqdn      = searchName + '.' + tld;
+    const available = await checkDomainAvailable(fqdn);
+    return { domain: fqdn, tld, available, owned: !!data.domains[fqdn], price: TLD_PRICES[tld] || null };
+  });
+
+  try {
+    const results = await Promise.all(checks);
+    res.json({ success: true, results });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// POST /api/orchestrator/domains/register — register a domain (Namecheap or local)
+app.post('/api/orchestrator/domains/register', async (req, res) => {
+  const { domain, years = 1, nameservers } = req.body || {};
+  if (!domain || !isValidDomain(domain)) return res.status(400).json({ success: false, error: 'Valid domain required.' });
+
+  const fqdn = domain.trim().toLowerCase();
+  const data = getDomains();
+  if (data.domains[fqdn]) return res.status(409).json({ success: false, error: 'Domain already registered.' });
+
+  let registrar = 'local';
+
+  const ncUser = (process.env.NAMECHEAP_API_USER || '').trim();
+  const ncKey  = (process.env.NAMECHEAP_API_KEY  || '').trim();
+
+  if (ncUser && ncKey) {
+    // Resolve server public IP for Namecheap API
+    let clientIp = '127.0.0.1';
+    try {
+      const { stdout } = await execPromise('curl -s --max-time 4 ifconfig.me', { timeout: 6000 });
+      clientIp = stdout.trim();
+    } catch {}
+
+    const [sld, ...tldParts] = fqdn.split('.');
+    const tldPart = tldParts.join('.');
+
+    const contact = {
+      FirstName:     process.env.NC_FIRST_NAME || 'Epic',
+      LastName:      process.env.NC_LAST_NAME  || 'Global',
+      Address1:      process.env.NC_ADDRESS    || '123 Cloud Street',
+      City:          process.env.NC_CITY       || 'San Francisco',
+      StateProvince: process.env.NC_STATE      || 'CA',
+      PostalCode:    process.env.NC_POSTAL     || '94102',
+      Country:       process.env.NC_COUNTRY    || 'US',
+      Phone:         process.env.NC_PHONE      || '+1.4155551234',
+      EmailAddress:  process.env.NC_EMAIL      || 'admin@epicglobal.app',
+    };
+
+    const params = new URLSearchParams({
+      ApiUser: ncUser, ApiKey: ncKey, UserName: ncUser,
+      Command: 'namecheap.domains.create',
+      ClientIp: clientIp,
+      SLD: sld, TLD: tldPart, Years: String(Math.min(Math.max(parseInt(years) || 1, 1), 10)),
+      ...Object.fromEntries(
+        ['Registrant','Tech','Admin','AuxBilling'].flatMap(role =>
+          Object.entries(contact).map(([k, v]) => [role + k, v])
+        )
+      ),
+    });
+
+    if (Array.isArray(nameservers) && nameservers.length > 0) {
+      nameservers.slice(0, 5).forEach((ns, i) => params.set('Nameserver' + (i + 1), ns));
+    }
+
+    try {
+      const apiBase = process.env.NAMECHEAP_SANDBOX === 'true'
+        ? 'https://api.sandbox.namecheap.com'
+        : 'https://api.namecheap.com';
+      const resp = await fetch(apiBase + '/xml.response?' + params.toString());
+      const text = await resp.text();
+      if (text.includes('Status="ERROR"')) {
+        const match = text.match(/<Error Number="[^"]*">([^<]+)<\/Error>/);
+        return res.status(400).json({ success: false, error: 'Namecheap: ' + (match ? match[1] : 'Registration failed.') });
+      }
+      registrar = 'namecheap';
+    } catch (e) {
+      return res.status(500).json({ success: false, error: 'Namecheap API error: ' + e.message });
+    }
+  }
+
+  const tld   = fqdn.split('.').slice(1).join('.');
+  const price = TLD_PRICES[tld] || null;
+  const yr    = Math.min(Math.max(parseInt(years) || 1, 1), 10);
+  const now   = new Date().toISOString();
+
+  data.domains[fqdn] = {
+    purchasedAt: now,
+    expiresAt:   new Date(Date.now() + yr * 365.25 * 24 * 60 * 60 * 1000).toISOString(),
+    years: yr, registrar, status: 'active', autoRenew: true, price,
+    dnsRecords: [],
+  };
+  saveDomains(data);
+  res.json({ success: true, domain: fqdn, entry: data.domains[fqdn] });
+});
+
+// DELETE /api/orchestrator/domains/:domain — remove domain from registry
+app.delete('/api/orchestrator/domains/:domain', (req, res) => {
+  const fqdn = req.params.domain.toLowerCase();
+  if (!isValidDomain(fqdn)) return res.status(400).json({ success: false, error: 'Invalid domain.' });
+  const data = getDomains();
+  if (!data.domains[fqdn]) return res.status(404).json({ success: false, error: 'Domain not found.' });
+  delete data.domains[fqdn];
+  saveDomains(data);
+  res.json({ success: true });
+});
+
+// PATCH /api/orchestrator/domains/:domain/autorenew — toggle auto-renew
+app.patch('/api/orchestrator/domains/:domain/autorenew', (req, res) => {
+  const fqdn = req.params.domain.toLowerCase();
+  if (!isValidDomain(fqdn)) return res.status(400).json({ success: false, error: 'Invalid domain.' });
+  const data = getDomains();
+  if (!data.domains[fqdn]) return res.status(404).json({ success: false, error: 'Domain not found.' });
+  data.domains[fqdn].autoRenew = !!req.body?.autoRenew;
+  saveDomains(data);
+  res.json({ success: true, autoRenew: data.domains[fqdn].autoRenew });
+});
+
+// GET /api/orchestrator/domains/:domain/dns — list DNS records
+app.get('/api/orchestrator/domains/:domain/dns', (req, res) => {
+  const fqdn = req.params.domain.toLowerCase();
+  if (!isValidDomain(fqdn)) return res.status(400).json({ success: false, error: 'Invalid domain.' });
+  const data = getDomains();
+  if (!data.domains[fqdn]) return res.status(404).json({ success: false, error: 'Domain not found.' });
+  res.json({ success: true, records: data.domains[fqdn].dnsRecords || [] });
+});
+
+// POST /api/orchestrator/domains/:domain/dns — add DNS record
+app.post('/api/orchestrator/domains/:domain/dns', (req, res) => {
+  const fqdn = req.params.domain.toLowerCase();
+  if (!isValidDomain(fqdn)) return res.status(400).json({ success: false, error: 'Invalid domain.' });
+  const { type, name, value, ttl = 300, priority } = req.body || {};
+  if (!VALID_DNS_TYPES.has(type))    return res.status(400).json({ success: false, error: 'Invalid record type.' });
+  if (!name || !value)               return res.status(400).json({ success: false, error: 'name and value required.' });
+  const data = getDomains();
+  if (!data.domains[fqdn]) return res.status(404).json({ success: false, error: 'Domain not found.' });
+  if (!data.domains[fqdn].dnsRecords) data.domains[fqdn].dnsRecords = [];
+
+  const record = {
+    id: crypto.randomUUID(),
+    type,
+    name:  String(name).trim().slice(0, 253),
+    value: String(value).trim().slice(0, 4096),
+    ttl:   Math.max(60, parseInt(ttl) || 300),
+    ...(priority !== undefined ? { priority: Math.max(0, parseInt(priority) || 0) } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  data.domains[fqdn].dnsRecords.push(record);
+  saveDomains(data);
+  res.json({ success: true, record });
+});
+
+// PUT /api/orchestrator/domains/:domain/dns/:recordId — update DNS record
+app.put('/api/orchestrator/domains/:domain/dns/:recordId', (req, res) => {
+  const fqdn     = req.params.domain.toLowerCase();
+  const recordId = req.params.recordId;
+  if (!isValidDomain(fqdn)) return res.status(400).json({ success: false, error: 'Invalid domain.' });
+  const { type, name, value, ttl, priority } = req.body || {};
+  if (type && !VALID_DNS_TYPES.has(type)) return res.status(400).json({ success: false, error: 'Invalid record type.' });
+  const data = getDomains();
+  if (!data.domains[fqdn]) return res.status(404).json({ success: false, error: 'Domain not found.' });
+  const records = data.domains[fqdn].dnsRecords || [];
+  const idx     = records.findIndex(r => r.id === recordId);
+  if (idx === -1) return res.status(404).json({ success: false, error: 'Record not found.' });
+
+  records[idx] = {
+    ...records[idx],
+    ...(type  ? { type }                                              : {}),
+    ...(name  ? { name:  String(name).trim().slice(0, 253) }         : {}),
+    ...(value ? { value: String(value).trim().slice(0, 4096) }       : {}),
+    ...(ttl   !== undefined ? { ttl: Math.max(60, parseInt(ttl) || 300) } : {}),
+    ...(priority !== undefined ? { priority: Math.max(0, parseInt(priority) || 0) } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  data.domains[fqdn].dnsRecords = records;
+  saveDomains(data);
+  res.json({ success: true, record: records[idx] });
+});
+
+// DELETE /api/orchestrator/domains/:domain/dns/:recordId — delete DNS record
+app.delete('/api/orchestrator/domains/:domain/dns/:recordId', (req, res) => {
+  const fqdn     = req.params.domain.toLowerCase();
+  const recordId = req.params.recordId;
+  if (!isValidDomain(fqdn)) return res.status(400).json({ success: false, error: 'Invalid domain.' });
+  const data = getDomains();
+  if (!data.domains[fqdn]) return res.status(404).json({ success: false, error: 'Domain not found.' });
+  const before = (data.domains[fqdn].dnsRecords || []).length;
+  data.domains[fqdn].dnsRecords = (data.domains[fqdn].dnsRecords || []).filter(r => r.id !== recordId);
+  if (data.domains[fqdn].dnsRecords.length === before) {
+    return res.status(404).json({ success: false, error: 'Record not found.' });
+  }
+  saveDomains(data);
+  res.json({ success: true });
 });
 
 // ---------------------------------------------------------

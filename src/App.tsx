@@ -11,11 +11,12 @@ import { CommandPalette } from './components/CommandPalette';
 import { KeyboardHUD } from './components/KeyboardHUD';
 import DeploymentDashboard from './components/DeploymentDashboard';
 import BackendManager from './components/BackendManager';
+import { DomainsTab } from './components/DomainsTab';
 import { useTelemetry } from './hooks/useTelemetry';
 
 const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
 const ACTIVE_TAB_KEY = 'eg_active_tab';
-const VALID_TABS = new Set(['overview', 'deployments', 'edge', 'setup', 'orchestrator', 'settings']);
+const VALID_TABS = new Set(['overview', 'deployments', 'edge', 'setup', 'orchestrator', 'settings', 'domains']);
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -129,6 +130,7 @@ export default function App() {
     { id: 'edge', label: 'Edge' },
     { id: 'setup', label: 'New Deploy' },
     { id: 'orchestrator', label: 'Manage Projects' },
+    { id: 'domains', label: 'Domains & DNS' },
     { id: 'settings', label: 'Settings' }
   ];
 
@@ -201,6 +203,7 @@ export default function App() {
           {activeTab === 'edge' && <DeploymentDashboard />}
           {/* Injecting the new God-Mode Engine Panel */}
           {activeTab === 'orchestrator' && <BackendManager />}
+          {activeTab === 'domains' && <DomainsTab />}
           {activeTab === 'settings' && <SettingsTab />}
           {activeTab === 'setup' && <SetupTab />}
         </div>
