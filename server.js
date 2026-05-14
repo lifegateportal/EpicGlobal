@@ -1244,6 +1244,26 @@ app.post('/api/orchestrator/secrets/:projectName', (req, res) => {
   });
 });
 
+app.delete('/api/orchestrator/secrets/:projectName/:varKey', (req, res) => {
+  const projectName = normalizeProjectName(req.params.projectName);
+  const varKey = String(req.params.varKey || '').trim().toUpperCase();
+  if (!projectName) return res.status(400).json({ success: false, error: 'Valid project name is required.' });
+  if (!varKey)      return res.status(400).json({ success: false, error: 'Valid variable key is required.' });
+
+  const vault = getVault();
+  const projectVault = vault.projects[projectName];
+  if (!projectVault || !projectVault.entries || !projectVault.entries[varKey]) {
+    return res.status(404).json({ success: false, error: 'Secret not found.' });
+  }
+
+  delete projectVault.entries[varKey];
+  projectVault.updatedAt = new Date().toISOString();
+  vault.projects[projectName] = projectVault;
+  saveVault(vault);
+
+  return res.json({ success: true, message: varKey + ' deleted.', updatedAt: projectVault.updatedAt });
+});
+
 app.post('/api/orchestrator/secrets/:projectName/apply', async (req, res) => {
   const projectName = normalizeProjectName(req.params.projectName);
   if (!projectName) {
@@ -1567,6 +1587,74 @@ app.post('/api/env', async (req, res) => {
       error: error.message || 'Failed to update environment variables.',
       terminalOutput: error.message
     });
+  }
+});
+
+app.get('/api/env/:projectName', async (req, res) => {
+  const { projectName } = req.params;
+  if (!projectName || !/^[a-z0-9-]+$/.test(projectName)) {
+    return res.status(400).json({ success: false, error: 'Invalid project name.' });
+  }
+  const deployPath = path.join(os.homedir(), 'deployments', projectName);
+  const envPath = path.join(deployPath, '.env');
+  try {
+    if (!fs.existsSync(deployPath)) {
+      return res.status(404).json({ success: false, error: 'Project not found.' });
+    }
+    let envVars = {};
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+      lines.forEach(line => {
+        const [key, ...rest] = line.split('=');
+        if (key && rest.length) {
+          let value = rest.join('=').trim();
+          if (value.startsWith('"') && value.endsWith('"')) value = JSON.parse(value);
+          envVars[key.trim()] = value;
+        }
+      });
+    }
+    res.json({ success: true, projectName, envVars });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/env/:projectName/:varName', async (req, res) => {
+  const { projectName, varName } = req.params;
+  if (!projectName || !/^[a-z0-9-]+$/.test(projectName)) {
+    return res.status(400).json({ success: false, error: 'Invalid project name.' });
+  }
+  const deployPath = path.join(os.homedir(), 'deployments', projectName);
+  const envPath = path.join(deployPath, '.env');
+  try {
+    if (!fs.existsSync(deployPath)) {
+      return res.status(404).json({ success: false, error: 'Project not found.' });
+    }
+    let envVars = {};
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf8');
+      const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#'));
+      lines.forEach(line => {
+        const [key, ...rest] = line.split('=');
+        if (key && rest.length) {
+          let value = rest.join('=').trim();
+          if (value.startsWith('"') && value.endsWith('"')) value = JSON.parse(value);
+          envVars[key.trim()] = value;
+        }
+      });
+    }
+    delete envVars[varName];
+    let envString = '';
+    Object.entries(envVars).forEach(([key, value]) => {
+      envString += key + '=' + JSON.stringify(String(value)) + '\n';
+    });
+    fs.writeFileSync(envPath, envString);
+    await execPromise('cd ' + quoteForShell(deployPath) + ' && pm2 restart ' + quoteForShell(projectName) + ' --update-env');
+    await execPromise('pm2 save');
+    res.json({ success: true, message: 'Variable deleted and project restarted.' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
