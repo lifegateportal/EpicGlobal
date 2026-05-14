@@ -310,7 +310,6 @@ export function DomainsTab() {
                 {searchResults.map(r => {
                   const isOwned     = r.owned;
                   const isFree      = r.available === true && !isOwned;
-                  const isTaken     = r.available === false && !isOwned;
                   const isUnknown   = r.available === null;
                   const isPurchasing = purchasing === r.domain;
 
