@@ -913,54 +913,57 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
 
       {subTab === 'history' && (
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden flex-1 flex flex-col min-h-0">
-        <button onClick={() => { setShowHistory(!showHistory); if (!showHistory) fetchHistory(); }}
-          className="w-full p-5 flex items-center justify-between bg-zinc-900/20 hover:bg-zinc-900/40 transition-colors">
+        <div className="px-4 sm:px-5 py-4 border-b border-zinc-800/60 bg-zinc-900/20 shrink-0">
           <h2 className="text-sm font-semibold text-zinc-100">All Deployment History <span className="text-zinc-600 font-normal ml-1">({history.length})</span></h2>
-          {showHistory ? <ChevronUp size={14} className="text-zinc-500" /> : <ChevronDown size={14} className="text-zinc-500" />}
-        </button>
+        </div>
 
-        {showHistory && (
-          <>
-            {/* Project filter */}
-            <div className="px-5 pt-3 pb-2 border-b border-zinc-800/60 flex items-center gap-2">
-              <label className="text-xs text-zinc-500 shrink-0">Filter by project:</label>
-              <select
-                value={historyFilter}
-                onChange={(e) => setHistoryFilter(e.target.value)}
-                className="flex-1 bg-black border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-zinc-500"
-              >
-                <option value="">All projects</option>
-                {Array.from(new Set(history.map(e => e.projectName))).sort().map(p => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
-              </select>
-              {historyFilter && <button onClick={() => setHistoryFilter('')} className="text-zinc-600 hover:text-zinc-400"><X size={13} /></button>}
-            </div>
-            <div className="divide-y divide-zinc-800/60">
-              {(() => {
-                const filtered = historyFilter ? history.filter(e => e.projectName === historyFilter) : history;
-                if (filtered.length === 0) return <div className="p-6 text-center text-zinc-600 text-sm">No history yet.</div>;
-                return filtered.slice().reverse().map((entry) => (
-                  <div key={entry.id} className="p-3 px-5 flex items-center justify-between hover:bg-zinc-900/20">
-                    <div className="flex items-center gap-3">
-                      {entry.status === 'success' && <CheckCircle2 size={14} className="text-green-400 shrink-0" />}
-                      {entry.status === 'failed' && <XCircle size={14} className="text-red-400 shrink-0" />}
-                      {entry.status === 'deleted' && <Trash2 size={14} className="text-zinc-500 shrink-0" />}
-                      <div>
-                        <span className="text-sm text-zinc-300 font-medium">{entry.projectName || 'unknown-project'}</span>
-                        {entry.details?.strategy && (
-                          <span className="ml-2 text-xs bg-zinc-900 text-zinc-400 border border-zinc-700 rounded px-1.5 py-0.5">{String(entry.details.strategy)}</span>
-                        )}
-                        {entry.details?.url && <span className="ml-2 text-xs text-zinc-600">{String(entry.details.url)}</span>}
-                      </div>
-                    </div>
-                    <span className="text-xs text-zinc-600 shrink-0 ml-4">{new Date(entry.timestamp).toLocaleString()}</span>
+        {/* Project filter */}
+        <div className="px-4 sm:px-5 py-2.5 border-b border-zinc-800/60 flex items-center gap-2 shrink-0">
+          <label className="text-xs text-zinc-500 shrink-0">Project:</label>
+          <select
+            value={historyFilter}
+            onChange={(e) => setHistoryFilter(e.target.value)}
+            className="flex-1 min-w-0 bg-black border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-zinc-500"
+          >
+            <option value="">All</option>
+            {Array.from(new Set(history.map(e => e.projectName))).sort().map(p => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+          {historyFilter && <button onClick={() => setHistoryFilter('')} className="text-zinc-600 hover:text-zinc-400 shrink-0"><X size={13} /></button>}
+        </div>
+
+        <div className="divide-y divide-zinc-800/60 overflow-y-auto flex-1">
+          {(() => {
+            const filtered = historyFilter ? history.filter(e => e.projectName === historyFilter) : history;
+            if (filtered.length === 0) return <div className="p-6 text-center text-zinc-600 text-sm">No history yet.</div>;
+            return filtered.slice().reverse().map((entry) => (
+              <div key={entry.id} className="px-4 sm:px-5 py-3 flex items-start gap-3 hover:bg-zinc-900/20 min-w-0">
+                <div className="shrink-0 mt-0.5">
+                  {entry.status === 'success' && <CheckCircle2 size={14} className="text-green-400" />}
+                  {entry.status === 'failed' && <XCircle size={14} className="text-red-400" />}
+                  {entry.status === 'deleted' && <Trash2 size={14} className="text-zinc-500" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm text-zinc-200 font-medium truncate">{entry.projectName || 'unknown-project'}</span>
+                    {entry.details?.strategy && (
+                      <span className="text-xs bg-zinc-900 text-zinc-400 border border-zinc-700 rounded px-1.5 py-0.5 whitespace-nowrap">{String(entry.details.strategy)}</span>
+                    )}
                   </div>
-                ));
-              })()}
-            </div>
-          </>
-        )}
+                  {entry.details?.url && (
+                    <p className="text-xs text-zinc-600 truncate mt-0.5">{String(entry.details.url)}</p>
+                  )}
+                </div>
+                <div className="text-xs text-zinc-600 shrink-0 text-right tabular-nums">
+                  <span>{new Date(entry.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                  <br />
+                  <span>{new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              </div>
+            ));
+          })()}
+        </div>
       </div>
       )}
     </div>

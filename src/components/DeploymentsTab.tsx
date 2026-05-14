@@ -434,16 +434,22 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
                   {/* Project header row */}
                   <button
                     onClick={() => toggleVault(name)}
-                    className="w-full px-5 py-4 flex items-center justify-between hover:bg-zinc-900/30 transition-colors"
+                    className="w-full px-4 sm:px-5 py-3.5 flex items-center gap-3 hover:bg-zinc-900/30 transition-colors text-left"
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-semibold text-zinc-100">{name}</span>
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                        project?.health.status === 'online' ? 'text-green-400 bg-green-950' : 'text-zinc-500 bg-zinc-800'
-                      }`}>{project?.health.status ?? 'stopped'}</span>
-                      {project?.domain && <span className="text-xs text-zinc-600">{project.domain}</span>}
-                      {storedEntries.length > 0 && (
-                        <span className="text-xs text-zinc-600">{storedEntries.length} variable{storedEntries.length !== 1 ? 's' : ''}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-zinc-100 truncate">{name}</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                          project?.health.status === 'online' ? 'text-green-400 bg-green-950' : 'text-zinc-500 bg-zinc-800'
+                        }`}>{project?.health.status ?? 'stopped'}</span>
+                      </div>
+                      {(project?.domain || storedEntries.length > 0) && (
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {project?.domain && <span className="text-xs text-zinc-600 truncate">{project.domain}</span>}
+                          {storedEntries.length > 0 && (
+                            <span className="text-xs text-zinc-600 shrink-0">{storedEntries.length} var{storedEntries.length !== 1 ? 's' : ''}</span>
+                          )}
+                        </div>
                       )}
                     </div>
                     {isOpen
