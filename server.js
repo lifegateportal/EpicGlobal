@@ -1070,6 +1070,95 @@ app.get('/api/orchestrator/files/:name', (req, res) => {
 });
 
 // ---------------------------------------------------------
+// API: Browse Directory in Static Project
+// ---------------------------------------------------------
+app.get('/api/orchestrator/files/:name/browse', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const subpath = (req.query.path || '').replace(/^\/+/, '');
+    const dir = path.join(DEPLOY_ROOT, name);
+    const targetDir = subpath ? path.join(dir, subpath) : dir;
+    if (!targetDir.startsWith(dir)) return res.status(400).json({ success: false, error: 'Invalid path.' });
+    if (!fs.existsSync(targetDir)) return res.status(404).json({ success: false, error: 'Directory not found.' });
+    const entries = fs.readdirSync(targetDir).map(n => {
+      const st = fs.statSync(path.join(targetDir, n));
+      return { name: n, isDir: st.isDirectory(), size: st.size, mtime: st.mtime.toISOString() };
+    }).sort((a, b) => (b.isDir ? 1 : 0) - (a.isDir ? 1 : 0) || a.name.localeCompare(b.name));
+    res.json({ success: true, entries });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ---------------------------------------------------------
+// API: Get File Content from Static Project
+// ---------------------------------------------------------
+app.get('/api/orchestrator/files/:name/content', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const relPath = (req.query.path || '').replace(/^\/+/, '');
+    if (!relPath) return res.status(400).json({ success: false, error: 'path query param required.' });
+    const dir = path.join(DEPLOY_ROOT, name);
+    const filePath = path.resolve(dir, relPath);
+    if (!filePath.startsWith(dir + path.sep)) return res.status(400).json({ success: false, error: 'Invalid path.' });
+    if (!fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'File not found.' });
+    const content = fs.readFileSync(filePath, 'utf8');
+    res.json({ success: true, content });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ---------------------------------------------------------
+// API: Create / Update File in Static Project
+// ---------------------------------------------------------
+app.post('/api/orchestrator/files/:name/file', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const relPath = (req.body?.relPath || '').replace(/^\/+/, '');
+    const content  = req.body?.content ?? '';
+    if (!relPath) return res.status(400).json({ success: false, error: 'relPath required.' });
+    const dir = path.join(DEPLOY_ROOT, name);
+    const filePath = path.resolve(dir, relPath);
+    if (!filePath.startsWith(dir + path.sep)) return res.status(400).json({ success: false, error: 'Invalid path.' });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ---------------------------------------------------------
+// API: Create Folder in Static Project
+// ---------------------------------------------------------
+app.post('/api/orchestrator/files/:name/folder', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const relPath = (req.body?.relPath || '').replace(/^\/+/, '');
+    if (!relPath) return res.status(400).json({ success: false, error: 'relPath required.' });
+    const dir = path.join(DEPLOY_ROOT, name);
+    const folderPath = path.resolve(dir, relPath);
+    if (!folderPath.startsWith(dir + path.sep)) return res.status(400).json({ success: false, error: 'Invalid path.' });
+    fs.mkdirSync(folderPath, { recursive: true });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ---------------------------------------------------------
+// API: Delete File or Folder in Static Project
+// ---------------------------------------------------------
+app.delete('/api/orchestrator/files/:name/item', (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const relPath = (req.body?.relPath || '').replace(/^\/+/, '');
+    if (!relPath) return res.status(400).json({ success: false, error: 'relPath required.' });
+    const dir = path.join(DEPLOY_ROOT, name);
+    const itemPath = path.resolve(dir, relPath);
+    if (!itemPath.startsWith(dir + path.sep)) return res.status(400).json({ success: false, error: 'Invalid path.' });
+    if (!fs.existsSync(itemPath)) return res.status(404).json({ success: false, error: 'Not found.' });
+    const st = fs.statSync(itemPath);
+    if (st.isDirectory()) { fs.rmSync(itemPath, { recursive: true }); }
+    else { fs.unlinkSync(itemPath); }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ---------------------------------------------------------
 // API: Rename File Inside Static Project
 // ---------------------------------------------------------
 app.post('/api/orchestrator/rename-file', (req, res) => {

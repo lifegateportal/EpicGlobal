@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X } from 'lucide-react';
+import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { API, apiFetch } from '../api/client';
@@ -8,6 +8,8 @@ import type { HistoryEntry, Project } from '../types';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type PendingRow = { id: string; key: string; value: string; showValue: boolean };
+type FileEntry = { name: string; isDir: boolean; size: number; mtime: string };
+type FileMgrState = { currentPath: string; entries: FileEntry[]; loading: boolean; editing: string | null; editContent: string; editSaving: boolean };
 
 type ProjectVault = {
   storedKeys: Record<string, string>; // key → masked value from server
@@ -40,6 +42,10 @@ export function DeploymentsTab() {
   const [expandedVault, setExpandedVault] = useState<string | null>(null);
   const [vaults, setVaults] = useState<Record<string, ProjectVault>>({});
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [expandedFiles, setExpandedFiles] = useState<string | null>(null);
+  const [fileMgr, setFileMgr] = useState<Record<string, FileMgrState>>({});
+  const [newItemModal, setNewItemModal] = useState<{ project: string; type: 'file' | 'folder' } | null>(null);
+  const [newItemName, setNewItemName] = useState('');
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -153,6 +159,29 @@ export function DeploymentsTab() {
     }
   };
 
+  const deleteSecret = async (projectName: string, varKey: string) => {
+    if (!confirm(`Delete ${varKey}?`)) return;
+    try {
+      const res  = await apiFetch(`${API}/api/orchestrator/secrets/${encodeURIComponent(projectName.toLowerCase())}/${encodeURIComponent(varKey)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`${varKey} deleted.`);
+        loadVaultPreview(projectName);
+      } else {
+        toast.error(data.error || 'Delete failed.');
+      }
+    } catch { toast.error('Could not reach API.'); }
+  };
+
+  const editSecret = (projectName: string, varKey: string) => {
+    // Pre-fill a pending row with the existing key so user just types the new value
+    const vault = getVault(projectName);
+    const alreadyPending = vault.pending.some(r => r.key === varKey);
+    if (!alreadyPending) {
+      patchVault(projectName, { pending: [...vault.pending, { id: `row-${++rowCounter}`, key: varKey, value: '', showValue: false }] });
+    }
+  };
+
   const applySecrets = async (name: string) => {
     patchVault(name, { saving: true });
     try {
@@ -166,6 +195,94 @@ export function DeploymentsTab() {
       }
     } catch { toast.error('Could not reach API.'); }
     finally { patchVault(name, { saving: false }); }
+  };
+
+  // ── File Manager ───────────────────────────────────────────────────────────
+
+  const getFileMgr = (name: string): FileMgrState =>
+    fileMgr[name] ?? { currentPath: '', entries: [], loading: false, editing: null, editContent: '', editSaving: false };
+
+  const patchFileMgr = (name: string, patch: Partial<FileMgrState>) =>
+    setFileMgr(prev => ({ ...prev, [name]: { ...getFileMgr(name), ...patch } }));
+
+  const browseFiles = async (name: string, subpath: string = '') => {
+    patchFileMgr(name, { loading: true, currentPath: subpath });
+    try {
+      const qs = subpath ? `?path=${encodeURIComponent(subpath)}` : '';
+      const res  = await apiFetch(`${API}/api/orchestrator/files/${encodeURIComponent(name)}/browse${qs}`);
+      const data = await res.json();
+      if (data.success) patchFileMgr(name, { entries: data.entries, loading: false });
+      else { toast.error(data.error || 'Could not list files.'); patchFileMgr(name, { loading: false }); }
+    } catch { toast.error('Could not reach API.'); patchFileMgr(name, { loading: false }); }
+  };
+
+  const toggleFiles = (name: string) => {
+    if (expandedFiles === name) { setExpandedFiles(null); return; }
+    setExpandedFiles(name);
+    browseFiles(name, '');
+  };
+
+  const createItem = async () => {
+    if (!newItemModal || !newItemName.trim()) return;
+    const { project, type } = newItemModal;
+    const mgr = getFileMgr(project);
+    const relPath = mgr.currentPath ? `${mgr.currentPath}/${newItemName.trim()}` : newItemName.trim();
+    const url = type === 'file'
+      ? `${API}/api/orchestrator/files/${encodeURIComponent(project)}/file`
+      : `${API}/api/orchestrator/files/${encodeURIComponent(project)}/folder`;
+    try {
+      const res  = await apiFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(type === 'file' ? { relPath, content: '' } : { relPath }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`${type === 'file' ? 'File' : 'Folder'} created.`);
+        setNewItemModal(null); setNewItemName('');
+        browseFiles(project, mgr.currentPath);
+      } else toast.error(data.error || 'Failed to create.');
+    } catch { toast.error('Could not reach API.'); }
+  };
+
+  const deleteItem = async (projectName: string, relPath: string) => {
+    if (!confirm(`Delete ${relPath}?`)) return;
+    try {
+      const res  = await apiFetch(`${API}/api/orchestrator/files/${encodeURIComponent(projectName)}/item`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ relPath }),
+      });
+      const data = await res.json();
+      if (data.success) { toast.success('Deleted.'); browseFiles(projectName, getFileMgr(projectName).currentPath); }
+      else toast.error(data.error || 'Delete failed.');
+    } catch { toast.error('Could not reach API.'); }
+  };
+
+  const openEditor = async (projectName: string, relPath: string) => {
+    try {
+      const res  = await apiFetch(`${API}/api/orchestrator/files/${encodeURIComponent(projectName)}/content?path=${encodeURIComponent(relPath)}`);
+      const data = await res.json();
+      if (data.success) patchFileMgr(projectName, { editing: relPath, editContent: data.content, editSaving: false });
+      else toast.error(data.error || 'Could not load file.');
+    } catch { toast.error('Could not reach API.'); }
+  };
+
+  const saveEdit = async (projectName: string) => {
+    const mgr = getFileMgr(projectName);
+    if (!mgr.editing) return;
+    patchFileMgr(projectName, { editSaving: true });
+    try {
+      const res  = await apiFetch(`${API}/api/orchestrator/files/${encodeURIComponent(projectName)}/file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ relPath: mgr.editing, content: mgr.editContent }),
+      });
+      const data = await res.json();
+      if (data.success) { toast.success('File saved.'); patchFileMgr(projectName, { editing: null, editContent: '', editSaving: false }); }
+      else toast.error(data.error || 'Save failed.');
+    } catch { toast.error('Could not reach API.'); }
+    finally { patchFileMgr(projectName, { editSaving: false }); }
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -331,7 +448,7 @@ export function DeploymentsTab() {
                               <span className="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold sm:w-32 text-right">Updated</span>
                             </div>
                             {storedEntries.map(([key]) => (
-                              <div key={key} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto] items-center px-4 sm:px-5 py-3 hover:bg-zinc-900/20 transition-colors group">
+                              <div key={key} className="grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_auto_auto_auto] items-center px-4 sm:px-5 py-3 hover:bg-zinc-900/20 transition-colors group">
                                 <div className="flex items-center gap-2 min-w-0">
                                   <Lock size={12} className="text-zinc-600 shrink-0" />
                                   <span className="text-sm font-mono text-zinc-200 font-medium truncate">{key}</span>
@@ -343,6 +460,22 @@ export function DeploymentsTab() {
                                     {new Date(vault.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                   </span>
                                 ) : <span className="sm:w-32" />}
+                                <div className="flex items-center gap-1 transition-opacity justify-end">
+                                  <button
+                                    onClick={() => editSecret(name, key)}
+                                    className="p-1.5 rounded text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+                                    title="Edit / rotate value"
+                                  >
+                                    <Pencil size={12} />
+                                  </button>
+                                  <button
+                                    onClick={() => deleteSecret(name, key)}
+                                    className="p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-colors"
+                                    title="Delete variable"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -433,6 +566,179 @@ export function DeploymentsTab() {
           </div>
         )}
       </div>
+
+      {/* STATIC FILE MANAGER ────────────────────────────────────────────── */}
+      {liveProjectNames.some(n => projects[n]?.deployType === 'static') && (
+        <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
+          <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Folder size={16} className="text-zinc-400" />
+              <h2 className="text-sm font-semibold text-zinc-100">Static File Manager</h2>
+            </div>
+            <span className="text-xs text-zinc-600">Create, edit &amp; delete files · static sites only</span>
+          </div>
+
+          <div className="divide-y divide-zinc-800/60">
+            {liveProjectNames.filter(n => projects[n]?.deployType === 'static').map(name => {
+              const mgr     = getFileMgr(name);
+              const project = projects[name];
+              const isOpen  = expandedFiles === name;
+              const breadcrumb = mgr.currentPath ? mgr.currentPath.split('/') : [];
+              return (
+                <div key={name}>
+                  <button
+                    onClick={() => toggleFiles(name)}
+                    className="w-full px-5 py-4 flex items-center justify-between hover:bg-zinc-900/30 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Folder size={14} className="text-zinc-500 shrink-0" />
+                      <span className="text-sm font-semibold text-zinc-100">{name}</span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                        project?.health.status === 'online' ? 'text-green-400 bg-green-950' : 'text-zinc-500 bg-zinc-800'
+                      }`}>{project?.health.status ?? 'stopped'}</span>
+                      {project?.domain && <span className="text-xs text-zinc-600">{project.domain}</span>}
+                    </div>
+                    {isOpen ? <ChevronUp size={14} className="text-zinc-500 shrink-0" /> : <ChevronDown size={14} className="text-zinc-500 shrink-0" />}
+                  </button>
+
+                  <AnimatePresence>
+                    {isOpen && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.18 }}
+                        className="overflow-hidden border-t border-zinc-800/60"
+                      >
+                        {mgr.editing ? (
+                          /* ── Inline editor ── */
+                          <div className="p-4 space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-mono text-zinc-400 truncate">{mgr.editing}</span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  onClick={() => patchFileMgr(name, { editing: null, editContent: '' })}
+                                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                                >Cancel</button>
+                                <button
+                                  onClick={() => saveEdit(name)}
+                                  disabled={mgr.editSaving}
+                                  className="text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-100 px-3 py-1.5 rounded transition-colors disabled:opacity-50"
+                                >{mgr.editSaving ? 'Saving…' : 'Save'}</button>
+                              </div>
+                            </div>
+                            <textarea
+                              value={mgr.editContent}
+                              onChange={e => patchFileMgr(name, { editContent: e.target.value })}
+                              className="w-full h-64 bg-black border border-zinc-700 rounded-md p-3 text-sm font-mono text-zinc-200 focus:outline-none focus:border-zinc-500 resize-y"
+                              spellCheck={false}
+                            />
+                          </div>
+                        ) : (
+                          <>
+                            {/* Breadcrumb + action buttons */}
+                            <div className="px-5 py-3 flex items-center justify-between gap-3 border-b border-zinc-800/40 bg-zinc-900/10 flex-wrap">
+                              <div className="flex items-center gap-1 text-xs text-zinc-500 flex-wrap">
+                                <button onClick={() => browseFiles(name, '')} className="hover:text-zinc-300 transition-colors">{name}</button>
+                                {breadcrumb.map((part, i) => {
+                                  const partPath = breadcrumb.slice(0, i + 1).join('/');
+                                  return (
+                                    <span key={i} className="flex items-center gap-1">
+                                      <ChevronRight size={10} className="text-zinc-700" />
+                                      <button onClick={() => browseFiles(name, partPath)} className="hover:text-zinc-300 transition-colors">{part}</button>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {mgr.currentPath && (
+                                  <button
+                                    onClick={() => {
+                                      const up = mgr.currentPath.includes('/') ? mgr.currentPath.split('/').slice(0, -1).join('/') : '';
+                                      browseFiles(name, up);
+                                    }}
+                                    className="p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded transition-colors"
+                                    title="Go up"
+                                  ><ArrowLeft size={13} /></button>
+                                )}
+                                <button
+                                  onClick={() => { setNewItemModal({ project: name, type: 'folder' }); setNewItemName(''); }}
+                                  className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 bg-zinc-800/60 hover:bg-zinc-700/60 px-2.5 py-1.5 rounded transition-colors"
+                                ><FolderPlus size={13} /> New Folder</button>
+                                <button
+                                  onClick={() => { setNewItemModal({ project: name, type: 'file' }); setNewItemName(''); }}
+                                  className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 bg-zinc-800/60 hover:bg-zinc-700/60 px-2.5 py-1.5 rounded transition-colors"
+                                ><FilePlus size={13} /> New File</button>
+                              </div>
+                            </div>
+
+                            {/* New item input */}
+                            {newItemModal?.project === name && (
+                              <div className="px-5 py-3 border-b border-zinc-800/40 bg-zinc-900/20 flex items-center gap-2 flex-wrap">
+                                <span className="text-xs text-zinc-500 shrink-0">
+                                  {newItemModal.type === 'file' ? 'File name:' : 'Folder name:'}
+                                </span>
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={newItemName}
+                                  onChange={e => setNewItemName(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') createItem(); if (e.key === 'Escape') setNewItemModal(null); }}
+                                  placeholder={newItemModal.type === 'file' ? 'index.html' : 'assets'}
+                                  className="flex-1 min-w-40 bg-black border border-zinc-700 rounded-md py-1.5 px-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
+                                />
+                                <button onClick={createItem} className="text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-100 px-3 py-1.5 rounded transition-colors">Create</button>
+                                <button onClick={() => setNewItemModal(null)} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">Cancel</button>
+                              </div>
+                            )}
+
+                            {/* File listing */}
+                            {mgr.loading ? (
+                              <div className="px-5 py-6 text-center text-zinc-600 text-sm">Loading files…</div>
+                            ) : mgr.entries.length === 0 ? (
+                              <div className="px-5 py-6 text-center text-zinc-600 text-sm">Empty directory. Use the buttons above to create a file or folder.</div>
+                            ) : (
+                              <div className="divide-y divide-zinc-800/40 max-h-72 overflow-y-auto">
+                                {mgr.entries.map(entry => {
+                                  const relPath = mgr.currentPath ? `${mgr.currentPath}/${entry.name}` : entry.name;
+                                  return (
+                                    <div key={entry.name} className="flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/20 transition-colors group">
+                                      {entry.isDir
+                                        ? <Folder size={14} className="text-blue-400 shrink-0" />
+                                        : <FileText size={14} className="text-zinc-500 shrink-0" />}
+                                      <button
+                                        onClick={() => entry.isDir ? browseFiles(name, relPath) : openEditor(name, relPath)}
+                                        className={`flex-1 text-sm text-left truncate ${entry.isDir ? 'text-zinc-200 font-medium hover:text-white' : 'text-zinc-300 hover:text-white'} transition-colors`}
+                                      >{entry.name}</button>
+                                      {!entry.isDir && (
+                                        <span className="text-xs text-zinc-600 shrink-0 hidden sm:block">
+                                          {entry.size < 1024 ? `${entry.size}B` : `${(entry.size / 1024).toFixed(1)}KB`}
+                                        </span>
+                                      )}
+                                      <span className="text-xs text-zinc-700 shrink-0 hidden sm:block">
+                                        {new Date(entry.mtime).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                      </span>
+                                      <button
+                                        onClick={() => deleteItem(name, relPath)}
+                                        className="p-1.5 text-zinc-600 hover:text-red-400 hover:bg-zinc-800 rounded transition-colors shrink-0"
+                                        title={`Delete ${entry.name}`}
+                                      ><Trash2 size={12} /></button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
