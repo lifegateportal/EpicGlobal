@@ -47,6 +47,7 @@ export default function App() {
     return saved.startsWith('domains/');
   });
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
 
@@ -117,6 +118,11 @@ export default function App() {
   const toggleDomains = () => {
     if (!domainsOpen) { setDomainsOpen(true); if (!activeTab.startsWith('domains/')) handleTabSwitch('domains/search'); }
     else setDomainsOpen(false);
+  };
+
+  const closeAndSwitch = (tab: string) => {
+    handleTabSwitch(tab);
+    setSidebarOpen(false);
   };
 
   if (!isAuthenticated) {
@@ -208,7 +214,7 @@ export default function App() {
     const isActive = activeTab === id;
     return (
       <button
-        onClick={() => handleTabSwitch(id)}
+        onClick={() => closeAndSwitch(id)}
         className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
           isActive ? 'bg-zinc-800/80 text-white' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900/60'
         }`}
@@ -250,7 +256,7 @@ export default function App() {
               return (
                 <button
                   key={subId}
-                  onClick={() => handleTabSwitch(subId)}
+                  onClick={() => closeAndSwitch(subId)}
                   className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition-colors ${
                     isActive ? 'bg-zinc-800/80 text-white font-medium' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900/60'
                   }`}
@@ -281,6 +287,7 @@ export default function App() {
         serverConnected={serverConnected}
         connectionStatusLabel={connectionStatusLabel}
         connectionStatusDetail={connectionStatusDetail}
+        onMenuToggle={() => setSidebarOpen(prev => !prev)}
         onLogout={() => { sessionStorage.removeItem('eg_auth'); setIsAuthenticated(false); }}
       />
 
@@ -291,8 +298,16 @@ export default function App() {
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        {/* ── Left Sidebar ── */}
-        <aside className="w-52 shrink-0 flex flex-col border-r border-zinc-800/60 bg-[#0A0A0A] overflow-y-auto">
+        {/* Mobile sidebar backdrop */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/70 lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
+        {/* ── Sidebar ── */}
+        <aside className={`fixed lg:relative inset-y-0 left-0 z-40 w-64 lg:w-52 shrink-0 flex flex-col border-r border-zinc-800/60 bg-[#0A0A0A] overflow-y-auto transform transition-transform duration-200 ease-in-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
           <nav className="flex-1 px-3 pt-3 pb-4">
 
             <SectionLabel label="Navigate" />
@@ -338,12 +353,12 @@ export default function App() {
 
         {/* ── Content Area ── */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          <div className="px-6 pt-5 pb-4 border-b border-zinc-800/60">
+          <div className="px-4 pt-4 pb-3 md:px-6 md:pt-5 md:pb-4 border-b border-zinc-800/60">
             <h1 className="text-lg font-semibold text-white tracking-tight">{currentPage.title}</h1>
             {currentPage.sub && <p className="text-sm text-zinc-500 mt-0.5">{currentPage.sub}</p>}
           </div>
 
-          <div className={`flex-1 min-h-0 p-6 overflow-y-auto transition-opacity duration-200 ${isNavigating ? 'opacity-0' : 'opacity-100'}`}>
+          <div className={`flex-1 min-h-0 p-4 lg:p-6 overflow-y-auto transition-opacity duration-200 ${isNavigating ? 'opacity-0' : 'opacity-100'}`}>
             {activeTab === 'overview' && (
               <OverviewTab performanceData={performanceData} serverConnected={serverConnected} connectionStatusDetail={connectionStatusDetail} />
             )}

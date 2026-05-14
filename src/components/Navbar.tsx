@@ -1,9 +1,10 @@
-import { LogOut } from 'lucide-react';
+import { LogOut, Menu } from 'lucide-react';
 
 type NavbarProps = {
   serverConnected?: boolean;
   connectionStatusLabel?: string;
   connectionStatusDetail?: string;
+  onMenuToggle?: () => void;
   onLogout?: () => void;
 };
 
@@ -11,15 +12,25 @@ export function Navbar({
   serverConnected = false,
   connectionStatusLabel = 'Disconnected',
   connectionStatusDetail,
+  onMenuToggle,
   onLogout,
 }: NavbarProps) {
   return (
     <nav className="shrink-0 z-50 border-b border-zinc-800/60 bg-[#0A0A0A] h-12 flex items-center px-4 justify-between gap-4">
-      <div className="flex items-center gap-2">
-        <div className="w-6 h-6 bg-white text-black flex items-center justify-center rounded-[4px] font-bold text-xs tracking-tighter">EG</div>
-        <span className="text-zinc-100 font-medium tracking-tight text-sm">EpicGlobal</span>
-        <span className="text-zinc-700 font-light text-lg leading-none">/</span>
-        <span className="text-zinc-400 text-sm">epicglobal.app</span>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onMenuToggle}
+          className="lg:hidden p-1 -ml-1 text-zinc-500 hover:text-zinc-200 transition-colors"
+          aria-label="Toggle menu"
+        >
+          <Menu size={18} />
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 bg-white text-black flex items-center justify-center rounded-[4px] font-bold text-xs tracking-tighter">EG</div>
+          <span className="text-zinc-100 font-medium tracking-tight text-sm">EpicGlobal</span>
+          <span className="text-zinc-700 font-light text-lg leading-none hidden sm:inline">/</span>
+          <span className="text-zinc-400 text-sm hidden sm:inline">epicglobal.app</span>
+        </div>
       </div>
 
       <div className="flex items-center gap-4">
