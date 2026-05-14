@@ -12,7 +12,9 @@ function StatusBadge({ status }: { status: string }) {
   return <span className="flex items-center gap-1.5 text-zinc-500 text-xs font-medium"><AlertCircle size={12} /> Stopped</span>;
 }
 
-export default function ProjectOrchestrator() {
+type OrchestratorSubTab = 'projects' | 'queue' | 'secrets' | 'backups' | 'monitoring' | 'history';
+
+export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: OrchestratorSubTab }) {
   const [projects, setProjects] = useState<Record<string, Project>>({});
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
@@ -424,11 +426,11 @@ export default function ProjectOrchestrator() {
   const projectList = Object.entries(projects).filter(([name]) => Boolean(name) && name !== 'undefined');
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-full flex flex-col gap-6">
 
-      {/* DEPLOY QUEUE */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
-        <div className="p-4 bg-zinc-900/20 border-b border-zinc-800/60 flex items-center justify-between">
+      {subTab === 'queue' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden flex-1 flex flex-col min-h-0">
+        <div className="p-4 bg-zinc-900/20 border-b border-zinc-800/60 flex items-center justify-between shrink-0">
           <h2 className="text-sm font-semibold text-zinc-100">Deploy Queue</h2>
           <button onClick={fetchQueue} className="text-zinc-500 hover:text-zinc-300 transition-colors" title="Refresh queue">
             <RefreshCw size={14} />
@@ -452,9 +454,11 @@ export default function ProjectOrchestrator() {
         </div>
       </div>
 
-      {/* SECRETS VAULT */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center gap-2">
+      )}
+
+      {subTab === 'secrets' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden flex-1 flex flex-col min-h-0">
+        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center gap-2 shrink-0">
           <KeyRound size={16} className="text-zinc-400" />
           <h2 className="text-sm font-semibold text-zinc-100">Encrypted Secrets Vault</h2>
         </div>
@@ -532,9 +536,11 @@ export default function ProjectOrchestrator() {
         </div>
       </div>
 
-      {/* BACKUP + RESTORE */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
+      )}
+
+      {subTab === 'backups' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden flex-1 flex flex-col min-h-0">
+        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <Download size={16} className="text-zinc-400" />
             <h2 className="text-sm font-semibold text-zinc-100">Backups & Restore</h2>
@@ -576,9 +582,11 @@ export default function ProjectOrchestrator() {
         </div>
       </div>
 
-      {/* AUTO-HEAL WATCHDOG */}
+      )}
+
+      {subTab === 'monitoring' && (
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
+        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <ShieldCheck size={16} className="text-zinc-400" />
             <h2 className="text-sm font-semibold text-zinc-100">Auto-Heal Watchdog</h2>
@@ -631,8 +639,9 @@ export default function ProjectOrchestrator() {
           )}
         </div>
       </div>
+      )}
 
-      {/* ALERT SETTINGS */}
+      {subTab === 'monitoring' && (
       <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
         <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center gap-2">
           <Bell size={16} className="text-zinc-400" />
@@ -687,9 +696,11 @@ export default function ProjectOrchestrator() {
         </div>
       </div>
 
-      {/* LIVE PROJECTS */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
+      )}
+
+      {subTab === 'projects' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden flex-1 flex flex-col min-h-0">
+        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between shrink-0">
           <h2 className="text-sm font-semibold text-zinc-100">Live Projects <span className="text-zinc-600 font-normal ml-1">({projectList.length})</span></h2>
           <div className="flex items-center gap-2">
             <button
@@ -898,8 +909,10 @@ export default function ProjectOrchestrator() {
         )}
       </div>
 
-      {/* DEPLOYMENT HISTORY */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden">
+      )}
+
+      {subTab === 'history' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl shadow-2xl overflow-hidden flex-1 flex flex-col min-h-0">
         <button onClick={() => { setShowHistory(!showHistory); if (!showHistory) fetchHistory(); }}
           className="w-full p-5 flex items-center justify-between bg-zinc-900/20 hover:bg-zinc-900/40 transition-colors">
           <h2 className="text-sm font-semibold text-zinc-100">All Deployment History <span className="text-zinc-600 font-normal ml-1">({history.length})</span></h2>
@@ -923,7 +936,7 @@ export default function ProjectOrchestrator() {
               </select>
               {historyFilter && <button onClick={() => setHistoryFilter('')} className="text-zinc-600 hover:text-zinc-400"><X size={13} /></button>}
             </div>
-            <div className="divide-y divide-zinc-800/60 max-h-80 overflow-y-auto">
+            <div className="divide-y divide-zinc-800/60">
               {(() => {
                 const filtered = historyFilter ? history.filter(e => e.projectName === historyFilter) : history;
                 if (filtered.length === 0) return <div className="p-6 text-center text-zinc-600 text-sm">No history yet.</div>;
@@ -949,6 +962,7 @@ export default function ProjectOrchestrator() {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

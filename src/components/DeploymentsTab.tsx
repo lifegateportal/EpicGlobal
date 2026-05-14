@@ -34,7 +34,9 @@ const newRow = (): PendingRow => ({ id: `row-${++rowCounter}`, key: '', value: '
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function DeploymentsTab() {
+type DeploymentsTabProps = { subTab?: 'history' | 'env' | 'files' };
+
+export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [projects, setProjects] = useState<Record<string, Project>>({});
   const [loading, setLoading] = useState(true);
@@ -317,11 +319,11 @@ export function DeploymentsTab() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-full flex flex-col gap-6">
 
-      {/* DEPLOYMENT HISTORY ─────────────────────────────────────────────── */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
-        <div className="p-3 sm:p-4 border-b border-zinc-800/60 flex items-center gap-2 bg-zinc-900/20">
+      {subTab === 'history' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col min-h-0">
+        <div className="p-3 sm:p-4 border-b border-zinc-800/60 flex items-center gap-2 bg-zinc-900/20 shrink-0">
           <div className="relative flex-1 sm:flex-none">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
             <input
@@ -344,7 +346,7 @@ export function DeploymentsTab() {
             {query ? 'No matching deployments.' : 'No deployments yet. Deploy a project from the Orchestrator tab.'}
           </div>
         ) : (
-          <div className="divide-y divide-zinc-800/60 max-h-[440px] overflow-y-auto">{filtered.map((entry) => {
+          <div className="divide-y divide-zinc-800/60 flex-1">{filtered.map((entry) => {
               const liveProject = projects[entry.projectName];
               const url = entry.details?.url
                 ? String(entry.details.url)
@@ -404,9 +406,11 @@ export function DeploymentsTab() {
         )}
       </div>
 
-      {/* ENVIRONMENT VARIABLES ───────────────────────────────────────────── */}
-      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
-        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
+      )}
+
+      {subTab === 'env' && (
+      <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col min-h-0">
+        <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <KeyRound size={16} className="text-zinc-400" />
             <h2 className="text-sm font-semibold text-zinc-100">Environment Variables</h2>
@@ -587,10 +591,11 @@ export function DeploymentsTab() {
         )}
       </div>
 
-      {/* STATIC FILE MANAGER ────────────────────────────────────────────── */}
-      {liveProjectNames.some(n => projects[n]?.deployType === 'static') && (
-        <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
-          <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between">
+      )}
+
+      {subTab === 'files' && liveProjectNames.some(n => projects[n]?.deployType === 'static') && (
+        <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col min-h-0">
+          <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
               <Folder size={16} className="text-zinc-400" />
               <h2 className="text-sm font-semibold text-zinc-100">Static File Manager</h2>

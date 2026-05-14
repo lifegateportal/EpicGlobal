@@ -93,8 +93,7 @@ function SubNav({ view, setView, hasDomain }: { view: ViewMode; setView: (v: Vie
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
-export function DomainsTab() {
-  const [view, setView] = useState<ViewMode>('search');
+export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate }: { subTab?: 'search' | 'mydomains' | 'dns'; onNavigateDns?: () => void; onNavigate?: (tab: 'search' | 'mydomains' | 'dns') => void }) {
 
   // Search state
   const [query, setQuery]           = useState('');
@@ -139,8 +138,8 @@ export function DomainsTab() {
     finally   { setLoadingDns(false); }
   }, []);
 
-  useEffect(() => { if (view === 'mydomains') fetchDomains(); }, [view, fetchDomains]);
-  useEffect(() => { if (view === 'dns' && selectedDomain) fetchDns(selectedDomain); }, [view, selectedDomain, fetchDns]);
+  useEffect(() => { if (subTab === 'mydomains') fetchDomains(); }, [subTab, fetchDomains]);
+  useEffect(() => { if (subTab === 'dns' && selectedDomain) fetchDns(selectedDomain); }, [subTab, selectedDomain, fetchDns]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const handleSearch = async (e?: React.FormEvent) => {
@@ -179,7 +178,7 @@ export function DomainsTab() {
 
   const openDns = (domain: string) => {
     setSelectedDomain(domain);
-    setView('dns');
+    onNavigateDns?.();
     setAddingRecord(false);
     setEditingId(null);
   };
@@ -259,12 +258,10 @@ export function DomainsTab() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
-      <SubNav view={view} setView={setView} hasDomain={!!selectedDomain} />
-
+    <div className="min-h-full flex flex-col gap-6">
       {/* ═══════════════════ SEARCH VIEW ═══════════════════ */}
-      {view === 'search' && (
-        <div className="space-y-4">
+      {subTab === 'search' && (
+        <div className="flex flex-col gap-4">
           {/* Search Card */}
           <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
             <div className="p-5 border-b border-zinc-800/40 bg-zinc-900/20 flex items-center gap-3">
@@ -399,9 +396,9 @@ export function DomainsTab() {
       )}
 
       {/* ═══════════════════ MY DOMAINS VIEW ═══════════════════ */}
-      {view === 'mydomains' && (
-        <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
-          <div className="p-5 border-b border-zinc-800/40 bg-zinc-900/20 flex items-center justify-between">
+      {subTab === 'mydomains' && (
+        <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col min-h-0">
+          <div className="p-5 border-b border-zinc-800/40 bg-zinc-900/20 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
               <Globe size={15} className="text-indigo-400" />
               <div>
@@ -420,6 +417,7 @@ export function DomainsTab() {
             </button>
           </div>
 
+          <div className="flex-1">
           {loadingDomains ? (
             <div className="flex items-center justify-center py-16 gap-3 text-zinc-500">
               <Loader2 size={16} className="animate-spin" />
@@ -430,7 +428,7 @@ export function DomainsTab() {
               <Globe size={36} className="mx-auto mb-4 text-zinc-700" />
               <p className="text-sm text-zinc-500 mb-4">No domains registered yet.</p>
               <button
-                onClick={() => setView('search')}
+                onClick={() => onNavigate?.('search')}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
               >
                 Search for a domain
@@ -500,16 +498,17 @@ export function DomainsTab() {
               })}
             </div>
           )}
+          </div>
         </div>
       )}
 
       {/* ═══════════════════ DNS MANAGER VIEW ═══════════════════ */}
-      {view === 'dns' && !selectedDomain && (
+      {subTab === 'dns' && !selectedDomain && (
         <div className="border border-dashed border-zinc-800/40 rounded-xl p-12 text-center">
           <Server size={36} className="mx-auto mb-4 text-zinc-700" />
           <p className="text-sm text-zinc-500 mb-4">No domain selected. Go to My Domains and click DNS.</p>
           <button
-            onClick={() => setView('mydomains')}
+            onClick={() => onNavigateDns?.()}
             className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm font-medium rounded-lg transition-colors"
           >
             Go to My Domains
@@ -517,14 +516,14 @@ export function DomainsTab() {
         </div>
       )}
 
-      {view === 'dns' && selectedDomain && (
-        <div className="space-y-4">
-          <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
+      {subTab === 'dns' && selectedDomain && (
+        <div className="flex-1 flex flex-col gap-4">
+          <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col min-h-0">
             {/* Header */}
             <div className="p-5 border-b border-zinc-800/40 bg-zinc-900/20 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <button
-                  onClick={() => setView('mydomains')}
+                  onClick={() => onNavigate?.('mydomains')}
                   className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0"
                 >
                   <ChevronLeft size={16} />
