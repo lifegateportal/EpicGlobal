@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight } from 'lucide-react';
+import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight, Upload } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { API, apiFetch } from '../api/client';
@@ -9,7 +9,7 @@ import type { HistoryEntry, Project } from '../types';
 
 type PendingRow = { id: string; key: string; value: string; showValue: boolean };
 type FileEntry = { name: string; isDir: boolean; size: number; mtime: string };
-type FileMgrState = { currentPath: string; entries: FileEntry[]; loading: boolean; editing: string | null; editContent: string; editSaving: boolean };
+type FileMgrState = { currentPath: string; entries: FileEntry[]; loading: boolean; editing: string | null; editContent: string; editSaving: boolean; uploading: boolean };
 
 type ProjectVault = {
   storedKeys: Record<string, string>; // key → masked value from server
@@ -200,7 +200,7 @@ export function DeploymentsTab() {
   // ── File Manager ───────────────────────────────────────────────────────────
 
   const getFileMgr = (name: string): FileMgrState =>
-    fileMgr[name] ?? { currentPath: '', entries: [], loading: false, editing: null, editContent: '', editSaving: false };
+    fileMgr[name] ?? { currentPath: '', entries: [], loading: false, editing: null, editContent: '', editSaving: false, uploading: false };
 
   const patchFileMgr = (name: string, patch: Partial<FileMgrState>) =>
     setFileMgr(prev => ({ ...prev, [name]: { ...getFileMgr(name), ...patch } }));
@@ -283,6 +283,26 @@ export function DeploymentsTab() {
       else toast.error(data.error || 'Save failed.');
     } catch { toast.error('Could not reach API.'); }
     finally { patchFileMgr(projectName, { editSaving: false }); }
+  };
+
+  const uploadFiles = async (projectName: string, inputFiles: FileList) => {
+    if (!inputFiles.length) return;
+    patchFileMgr(projectName, { uploading: true });
+    const mgr = getFileMgr(projectName);
+    const fd  = new FormData();
+    fd.append('targetPath', mgr.currentPath);
+    Array.from(inputFiles).forEach(f => {
+      fd.append('files', f);
+      // webkitRelativePath preserves folder structure; fall back to plain name
+      fd.append('relPaths', (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name);
+    });
+    try {
+      const res  = await apiFetch(`${API}/api/orchestrator/files/${encodeURIComponent(projectName)}/upload`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success) { toast.success(`${data.count} file${data.count !== 1 ? 's' : ''} uploaded.`); browseFiles(projectName, mgr.currentPath); }
+      else toast.error(data.error || 'Upload failed.');
+    } catch { toast.error('Could not reach API.'); }
+    finally { patchFileMgr(projectName, { uploading: false }); }
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -611,7 +631,7 @@ export function DeploymentsTab() {
                         className="overflow-hidden border-t border-zinc-800/60"
                       >
                         {mgr.editing ? (
-                          /* ── Inline editor ── */
+                          /* ── Inline editor with line numbers ── */
                           <div className="p-4 space-y-3">
                             <div className="flex items-center justify-between gap-2">
                               <span className="text-xs font-mono text-zinc-400 truncate">{mgr.editing}</span>
@@ -627,12 +647,28 @@ export function DeploymentsTab() {
                                 >{mgr.editSaving ? 'Saving…' : 'Save'}</button>
                               </div>
                             </div>
-                            <textarea
-                              value={mgr.editContent}
-                              onChange={e => patchFileMgr(name, { editContent: e.target.value })}
-                              className="w-full h-64 bg-black border border-zinc-700 rounded-md p-3 text-sm font-mono text-zinc-200 focus:outline-none focus:border-zinc-500 resize-y"
-                              spellCheck={false}
-                            />
+                            <div className="flex border border-zinc-700 rounded-md overflow-hidden" style={{ height: '16rem' }}>
+                              <div
+                                className="bg-zinc-900/80 text-zinc-600 text-xs font-mono py-3 px-2 select-none text-right overflow-hidden shrink-0 leading-5"
+                                style={{ minWidth: '2.8rem' }}
+                                aria-hidden="true"
+                              >
+                                {mgr.editContent.split('\n').map((_, i) => (
+                                  <div key={i} className="leading-5">{i + 1}</div>
+                                ))}
+                              </div>
+                              <textarea
+                                value={mgr.editContent}
+                                onChange={e => patchFileMgr(name, { editContent: e.target.value })}
+                                onScroll={e => {
+                                  const el = e.currentTarget;
+                                  const gutter = el.previousSibling as HTMLElement;
+                                  if (gutter) gutter.scrollTop = el.scrollTop;
+                                }}
+                                className="flex-1 bg-black text-sm font-mono text-zinc-200 py-3 px-3 resize-none focus:outline-none leading-5 overflow-auto"
+                                spellCheck={false}
+                              />
+                            </div>
                           </div>
                         ) : (
                           <>
@@ -661,6 +697,22 @@ export function DeploymentsTab() {
                                     title="Go up"
                                   ><ArrowLeft size={13} /></button>
                                 )}
+                                {/* Hidden inputs — per-project ID */}
+                                <input id={`fi-${name}`} type="file" multiple className="hidden"
+                                  onChange={e => { if (e.target.files) uploadFiles(name, e.target.files); e.target.value = ''; }} />
+                                <input id={`fld-${name}`} type="file" className="hidden"
+                                  {...{ webkitdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>}
+                                  onChange={e => { if (e.target.files) uploadFiles(name, e.target.files); e.target.value = ''; }} />
+                                <button
+                                  onClick={() => document.getElementById(`fi-${name}`)?.click()}
+                                  disabled={mgr.uploading}
+                                  className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 bg-zinc-800/60 hover:bg-zinc-700/60 px-2.5 py-1.5 rounded transition-colors disabled:opacity-50"
+                                ><Upload size={13} /> {mgr.uploading ? 'Uploading…' : 'Upload Files'}</button>
+                                <button
+                                  onClick={() => document.getElementById(`fld-${name}`)?.click()}
+                                  disabled={mgr.uploading}
+                                  className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 bg-zinc-800/60 hover:bg-zinc-700/60 px-2.5 py-1.5 rounded transition-colors disabled:opacity-50"
+                                ><Folder size={13} /> Upload Folder</button>
                                 <button
                                   onClick={() => { setNewItemModal({ project: name, type: 'folder' }); setNewItemName(''); }}
                                   className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-100 bg-zinc-800/60 hover:bg-zinc-700/60 px-2.5 py-1.5 rounded transition-colors"

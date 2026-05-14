@@ -1161,6 +1161,35 @@ app.delete('/api/orchestrator/files/:name/item', (req, res) => {
 });
 
 // ---------------------------------------------------------
+// API: Upload Files / Folder into Static Project
+// ---------------------------------------------------------
+app.post('/api/orchestrator/files/:name/upload', uploadMiddleware.array('files', 500), (req, res) => {
+  try {
+    const name = normalizeProjectName(req.params.name);
+    const targetPath = (req.body?.targetPath || '').replace(/^\/+/, '');
+    const relPaths = req.body?.relPaths;
+    const pathsArr = Array.isArray(relPaths) ? relPaths : (relPaths ? [relPaths] : []);
+    const dir = path.join(DEPLOY_ROOT, name);
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ success: false, error: 'No files uploaded.' });
+    }
+
+    req.files.forEach((file, i) => {
+      const relFile = (pathsArr[i] || file.originalname || '').replace(/^\/+/, '');
+      const fullPath = targetPath
+        ? path.resolve(dir, targetPath, relFile)
+        : path.resolve(dir, relFile);
+      if (!fullPath.startsWith(dir + path.sep) && fullPath !== dir) return;
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, file.buffer);
+    });
+
+    res.json({ success: true, count: req.files.length });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ---------------------------------------------------------
 // API: Rename File Inside Static Project
 // ---------------------------------------------------------
 app.post('/api/orchestrator/rename-file', (req, res) => {
