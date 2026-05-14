@@ -647,28 +647,40 @@ export function DeploymentsTab() {
                                 >{mgr.editSaving ? 'Saving…' : 'Save'}</button>
                               </div>
                             </div>
-                            <div className="flex border border-zinc-700 rounded-md overflow-hidden" style={{ height: '16rem' }}>
-                              <div
-                                className="bg-zinc-900/80 text-zinc-600 text-xs font-mono py-3 px-2 select-none text-right overflow-hidden shrink-0 leading-5"
-                                style={{ minWidth: '2.8rem' }}
-                                aria-hidden="true"
-                              >
-                                {mgr.editContent.split('\n').map((_, i) => (
-                                  <div key={i} className="leading-5">{i + 1}</div>
-                                ))}
-                              </div>
-                              <textarea
-                                value={mgr.editContent}
-                                onChange={e => patchFileMgr(name, { editContent: e.target.value })}
-                                onScroll={e => {
-                                  const el = e.currentTarget;
-                                  const gutter = el.previousSibling as HTMLElement;
-                                  if (gutter) gutter.scrollTop = el.scrollTop;
-                                }}
-                                className="flex-1 bg-black text-sm font-mono text-zinc-200 py-3 px-3 resize-none focus:outline-none leading-5 overflow-auto"
-                                spellCheck={false}
-                              />
-                            </div>
+                            {/* Outer div scrolls — line numbers + textarea ride together, no JS sync needed */}
+                            {(() => {
+                              const lines = mgr.editContent.split('\n');
+                              const lineCount = Math.max(lines.length, 20);
+                              const LH = 21; // px — matches text-sm (14px) at 1.5 line-height
+                              const PT = 12; // px — py-3
+                              const editorH = lineCount * LH + PT * 2;
+                              return (
+                                <div className="border border-zinc-700 rounded-md overflow-auto bg-black" style={{ height: '18rem' }}>
+                                  <div className="flex" style={{ minHeight: '18rem' }}>
+                                    {/* Gutter */}
+                                    <div
+                                      className="sticky left-0 z-10 bg-[#111] border-r border-zinc-800 select-none shrink-0 text-right"
+                                      style={{ minWidth: '3.2rem', paddingTop: PT, paddingBottom: PT }}
+                                      aria-hidden="true"
+                                    >
+                                      {Array.from({ length: lineCount }, (_, i) => (
+                                        <div key={i} className="pr-3 text-zinc-600 font-mono" style={{ fontSize: 12, lineHeight: `${LH}px` }}>
+                                          {i + 1}
+                                        </div>
+                                      ))}
+                                    </div>
+                                    {/* Textarea — overflow hidden, height driven by content */}
+                                    <textarea
+                                      value={mgr.editContent}
+                                      onChange={e => patchFileMgr(name, { editContent: e.target.value })}
+                                      className="flex-1 bg-black text-zinc-200 font-mono resize-none focus:outline-none overflow-hidden pl-3 pr-3"
+                                      style={{ fontSize: 14, lineHeight: `${LH}px`, paddingTop: PT, paddingBottom: PT, height: editorH, minWidth: 0 }}
+                                      spellCheck={false}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         ) : (
                           <>
