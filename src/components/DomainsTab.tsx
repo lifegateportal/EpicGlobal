@@ -39,7 +39,6 @@ type DomainEntry = {
   dnsRecords: DnsRecord[];
 };
 
-type ViewMode = 'search' | 'mydomains' | 'dns';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const TYPE_COLORS: Record<string, string> = {
@@ -63,34 +62,6 @@ function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 const emptyRecord = (): Partial<DnsRecord> => ({ type: 'A', name: '@', value: '', ttl: 300 });
-
-// ── Sub-nav pill ───────────────────────────────────────────────────────────────
-function SubNav({ view, setView, hasDomain }: { view: ViewMode; setView: (v: ViewMode) => void; hasDomain: boolean }) {
-  const tabs = [
-    { id: 'search'   as ViewMode, label: 'Search & Purchase', Icon: SearchIcon },
-    { id: 'mydomains'as ViewMode, label: 'My Domains',        Icon: Globe },
-    { id: 'dns'      as ViewMode, label: 'DNS Manager',       Icon: Server },
-  ];
-  return (
-    <div className="flex gap-1 bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-1 w-fit overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-      {tabs.map(({ id, label, Icon }) => (
-        <button
-          key={id}
-          onClick={() => {
-            if (id === 'dns' && !hasDomain) { toast.info('Select a domain from My Domains first'); return; }
-            setView(id);
-          }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
-            view === id ? 'bg-white text-black' : 'text-zinc-400 hover:text-zinc-200'
-          }`}
-        >
-          <Icon size={14} />
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate }: { subTab?: 'search' | 'mydomains' | 'dns'; onNavigateDns?: () => void; onNavigate?: (tab: 'search' | 'mydomains' | 'dns') => void }) {
