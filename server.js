@@ -425,6 +425,30 @@ async function probeHealth(port, retries, delayMs) {
   return false;
 }
 
+// Write decrypted vault secrets for a project to .env.local in the deploy dir.
+// Returns a log line. Non-fatal — never throws.
+function writeVaultEnv(projectName, deployPath) {
+  try {
+    const vault = getVault();
+    const projectVault = vault.projects?.[projectName];
+    const entries = projectVault?.entries || {};
+    const keys = Object.keys(entries);
+    if (keys.length === 0) return '';
+    const lines = keys.map((key) => {
+      try {
+        return key + '=' + decryptSecret(entries[key]);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+    if (lines.length === 0) return '';
+    fs.writeFileSync(path.join(deployPath, '.env.local'), lines.join('\n') + '\n');
+    return '\n[env] Injected ' + lines.length + ' secret(s) into .env.local before build.';
+  } catch (e) {
+    return '\n[env] Warning: could not write vault secrets: ' + e.message;
+  }
+}
+
 // Build and start a candidate PM2 process for a project.
 // Returns { stdout, stderr, candidateName, candidatePath }.
 async function buildCandidate(projectName, repoUrl, candidatePort) {
@@ -432,11 +456,15 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
   const stablePath = path.join(DEPLOY_ROOT, projectName);
-  const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+  const cloneCandCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(candidatePath) +
     ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
     ' && if [ -f ' + quoteForShell(stablePath + '/.env') + ' ]; then cp ' + quoteForShell(stablePath + '/.env') + ' ' + quoteForShell(candidatePath + '/.env') + '; fi' +
-    ' && cd ' + quoteForShell(candidatePath) +
+    ' && if [ -f ' + quoteForShell(stablePath + '/.env.local') + ' ]; then cp ' + quoteForShell(stablePath + '/.env.local') + ' ' + quoteForShell(candidatePath + '/.env.local') + '; fi';
+  await execPromise(cloneCandCmd);
+  // Refresh vault secrets in case they were updated since last deploy
+  writeVaultEnv(projectName, candidatePath);
+  const cmd = 'cd ' + quoteForShell(candidatePath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
     ' && pm2 delete ' + quoteForShell(candidateName) + ' || true' +
@@ -484,10 +512,18 @@ async function rollbackCandidate(candidateName, candidatePath) {
 async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   const deployPath = path.join(DEPLOY_ROOT, projectName);
 
-  const cmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+  // Step 1: Clone
+  const cloneCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(deployPath) +
-    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath) +
-    ' && cd ' + quoteForShell(deployPath) +
+    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath);
+  const { stdout: cloneOut, stderr: cloneErr } = await execPromise(cloneCmd);
+  let output = [cloneOut, cloneErr].filter(Boolean).join('\n').trim();
+
+  // Step 2: Write vault secrets to .env.local so they are available during build
+  output += writeVaultEnv(projectName, deployPath);
+
+  // Step 3: Install, build, start
+  const buildCmd = 'cd ' + quoteForShell(deployPath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
     ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
@@ -497,9 +533,9 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
     '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi' +
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
-
-  const { stdout, stderr } = await execPromise(cmd);
-  return [stdout, stderr].filter(Boolean).join('\n').trim();
+  const { stdout: buildOut, stderr: buildErr } = await execPromise(buildCmd);
+  output += '\n' + [buildOut, buildErr].filter(Boolean).join('\n').trim();
+  return output;
 }
 
 async function executeOrchestratorDeploy(payload) {
