@@ -467,7 +467,7 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   const cmd = 'cd ' + quoteForShell(candidatePath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
-    ' && pm2 delete ' + quoteForShell(candidateName) + ' || true' +
+    ' && { pm2 delete ' + quoteForShell(candidateName) + ' 2>/dev/null || true; }' +
     ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
     '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
     '; elif [ -d .next ]; then PORT=' + candidatePort + ' pm2 start ' + quoteForShell('npx next start --port ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
@@ -526,7 +526,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   const buildCmd = 'cd ' + quoteForShell(deployPath) +
     ' && npm install --no-audit --no-fund' +
     ' && npm run build --if-present' +
-    ' && pm2 delete ' + quoteForShell(projectName) + ' || true' +
+    ' && { pm2 delete ' + quoteForShell(projectName) + ' 2>/dev/null || true; }' +
     ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
     '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
     '; elif [ -d .next ]; then PORT=' + port + ' pm2 start ' + quoteForShell('npx next start --port ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
