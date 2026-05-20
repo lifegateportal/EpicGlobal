@@ -17,6 +17,14 @@ const unzipper = require('unzipper');
 
 const execPromise = util.promisify(exec);
 
+// Keep the process alive — log crashes instead of exiting.
+process.on('uncaughtException', (err) => {
+  console.error('[crash] Uncaught exception:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[crash] Unhandled rejection:', reason);
+});
+
 // ---------------------------------------------------------
 // CONFIG
 // ---------------------------------------------------------
