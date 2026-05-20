@@ -1,4 +1,12 @@
-// Load .env file if present (must be first).
+// Keep the process alive — must register BEFORE any require() so MODULE_NOT_FOUND is caught.
+process.on('uncaughtException', (err) => {
+  console.error('[crash] Uncaught exception:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[crash] Unhandled rejection:', reason);
+});
+
+// Load .env file if present (must be early).
 // override:true ensures stale/empty PM2 env values do not block .env values.
 try { require('dotenv').config({ path: require('path').join(__dirname, '.env'), override: true }); } catch (e) {}
 
@@ -16,14 +24,6 @@ const multer = require('multer');
 const unzipper = require('unzipper');
 
 const execPromise = util.promisify(exec);
-
-// Keep the process alive — log crashes instead of exiting.
-process.on('uncaughtException', (err) => {
-  console.error('[crash] Uncaught exception:', err.message, err.stack);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('[crash] Unhandled rejection:', reason);
-});
 
 // ---------------------------------------------------------
 // CONFIG
