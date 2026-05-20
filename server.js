@@ -300,6 +300,7 @@ function buildCaddyConfig(registry) {
     '  file_server\n' +
     '  try_files {path} /index.html\n' +
     '  encode gzip zstd\n' +
+    '  header /index.html Cache-Control "no-cache, no-store, must-revalidate"\n' +
     '}\n\n';
 
   // Orchestrator API — CORS is handled by Express middleware in server.js
