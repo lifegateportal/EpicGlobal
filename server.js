@@ -627,11 +627,9 @@ async function executeOrchestratorDeploy(payload) {
       const healthy = await probeHealth(port, 5, 3000);
       if (!healthy) {
         // PM2 started but serve isn't responding — tear down and fail cleanly.
+        // Keep the registry entry so the user can set env vars and redeploy.
         try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
         try { await execPromise('rm -rf ' + quoteForShell(path.join(DEPLOY_ROOT, projectName))); } catch (_) {}
-        const registry2 = getRegistry();
-        delete registry2.projects[projectName];
-        saveRegistry(registry2);
         appendHistory(projectName, 'failed', {
           error: 'Process started but did not respond on port ' + port + ' after 15 s.',
           repoUrl,
@@ -1371,11 +1369,6 @@ app.post('/api/orchestrator/secrets/:projectName', (req, res) => {
 
   if (!envMap || Object.keys(envMap).length === 0) {
     return res.status(400).json({ success: false, error: 'No secrets provided.' });
-  }
-
-  const registry = getRegistry();
-  if (!registry.projects[projectName]) {
-    return res.status(404).json({ success: false, error: 'Project not found in registry.' });
   }
 
   const vault = getVault();

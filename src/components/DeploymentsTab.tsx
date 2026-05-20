@@ -36,6 +36,97 @@ const newRow = (): PendingRow => ({ id: `row-${++rowCounter}`, key: '', value: '
 
 type DeploymentsTabProps = { subTab?: 'history' | 'env' | 'files' };
 
+// ─── History Row ──────────────────────────────────────────────────────────────
+function HistoryRow({ entry, liveProject, url, deletingId, onDelete }: {
+  entry: HistoryEntry;
+  liveProject: Project | undefined;
+  url: string | null;
+  deletingId: number | null;
+  onDelete: (id: number) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isFailed = entry.status === 'failed';
+  const errorMsg = entry.details?.error || '';
+  const buildLog = entry.details?.log || '';
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-[#0A0A0A]">
+      <div className="p-3 sm:p-4 flex items-center justify-between hover:bg-zinc-900/40 transition-colors group">
+        <div className="flex items-center gap-3 min-w-0">
+          {entry.status === 'success'
+            ? <CheckCircle2 size={15} className="text-green-400 shrink-0" />
+            : isFailed
+            ? <div className="w-4 h-4 rounded-full border-2 border-red-500 text-red-500 flex items-center justify-center text-[9px] font-bold shrink-0">!</div>
+            : <Trash2 size={15} className="text-zinc-600 shrink-0" />}
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-zinc-200 mb-0.5 truncate">{entry.projectName || 'unknown-project'}</p>
+            <div className="flex items-center gap-2 text-xs text-zinc-500 flex-wrap">
+              <span className="shrink-0">{new Date(entry.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} <span className="hidden sm:inline">{new Date(entry.timestamp).toLocaleTimeString()}</span></span>
+              {entry.details?.strategy === 'blue-green' && (
+                <span className="hidden sm:inline bg-blue-950 text-blue-400 border border-blue-800 rounded px-1.5 py-0.5">blue-green</span>
+              )}
+              {liveProject && (
+                <span className={`font-medium ${liveProject.health.status === 'online' ? 'text-green-400' : 'text-zinc-500'}`}>
+                  {liveProject.health.status}
+                </span>
+              )}
+              {url && (
+                <a href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-400 hover:underline truncate max-w-[120px] sm:max-w-[200px]">
+                  {url} <ExternalLink size={10} />
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 ml-2 shrink-0">
+          <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+            entry.status === 'success' ? 'text-green-400 bg-green-950' :
+            isFailed                   ? 'text-red-400 bg-red-950'    :
+            'text-zinc-500 bg-zinc-800/60'
+          }`}>{entry.status.toUpperCase()}</span>
+          {isFailed && (errorMsg || buildLog) && (
+            <button
+              onClick={() => setExpanded(v => !v)}
+              className="p-1.5 rounded text-red-400 hover:bg-zinc-800 transition-all"
+              title="Show error details"
+            >
+              {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+          )}
+          <button
+            onClick={() => onDelete(entry.id)}
+            disabled={deletingId === entry.id}
+            className="opacity-0 group-hover:opacity-100 p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-all disabled:opacity-30"
+            title="Remove entry"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      </div>
+      <AnimatePresence>
+        {expanded && isFailed && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden border-t border-red-900/40"
+          >
+            <div className="px-4 py-3 space-y-2">
+              {errorMsg && (
+                <p className="text-xs text-red-400 font-medium">{errorMsg}</p>
+              )}
+              {buildLog && (
+                <pre className="text-[11px] text-zinc-400 bg-zinc-950 border border-zinc-800 rounded p-3 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto leading-relaxed">{buildLog}</pre>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
 export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [projects, setProjects] = useState<Record<string, Project>>({});
@@ -314,7 +405,10 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
     return !q || projectName?.toLowerCase().includes(q) || status?.toLowerCase().includes(q);
   });
 
-  const liveProjectNames = Object.keys(projects).filter(n => Boolean(n) && n !== 'undefined');
+  const liveProjectNames = Array.from(new Set([
+    ...Object.keys(projects),
+    ...history.map(e => e.projectName),
+  ])).filter(n => Boolean(n) && n !== 'undefined');
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -352,54 +446,14 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
                 ? String(entry.details.url)
                 : liveProject?.domain ? `https://${liveProject.domain}` : null;
               return (
-                <motion.div
+                <HistoryRow
                   key={entry.id}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="p-3 sm:p-4 flex items-center justify-between bg-[#0A0A0A] hover:bg-zinc-900/40 transition-colors group"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {entry.status === 'success'
-                      ? <CheckCircle2 size={15} className="text-green-400 shrink-0" />
-                      : entry.status === 'failed'
-                      ? <div className="w-4 h-4 rounded-full border-2 border-red-500 text-red-500 flex items-center justify-center text-[9px] font-bold shrink-0">!</div>
-                      : <Trash2 size={15} className="text-zinc-600 shrink-0" />}
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-zinc-200 mb-0.5 truncate">{entry.projectName || 'unknown-project'}</p>
-                      <div className="flex items-center gap-2 text-xs text-zinc-500 flex-wrap">
-                        <span className="shrink-0">{new Date(entry.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} <span className="hidden sm:inline">{new Date(entry.timestamp).toLocaleTimeString()}</span></span>
-                        {entry.details?.strategy === 'blue-green' && (
-                          <span className="hidden sm:inline bg-blue-950 text-blue-400 border border-blue-800 rounded px-1.5 py-0.5">blue-green</span>
-                        )}
-                        {liveProject && (
-                          <span className={`font-medium ${liveProject.health.status === 'online' ? 'text-green-400' : 'text-zinc-500'}`}>
-                            {liveProject.health.status}
-                          </span>
-                        )}
-                        {url && (
-                          <a href={url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-blue-400 hover:underline truncate max-w-[120px] sm:max-w-[200px]">
-                            {url} <ExternalLink size={10} />
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 ml-2 shrink-0">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                      entry.status === 'success' ? 'text-green-400 bg-green-950' :
-                      entry.status === 'failed'  ? 'text-red-400 bg-red-950'   :
-                      'text-zinc-500 bg-zinc-800/60'
-                    }`}>{entry.status.toUpperCase()}</span>
-                    <button
-                      onClick={() => deleteEntry(entry.id)}
-                      disabled={deletingId === entry.id}
-                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-all disabled:opacity-30"
-                      title="Remove entry"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                </motion.div>
+                  entry={entry}
+                  liveProject={liveProject}
+                  url={url}
+                  deletingId={deletingId}
+                  onDelete={deleteEntry}
+                />
               );
             })}
           </div>
