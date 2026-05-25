@@ -10,7 +10,13 @@ epicglobal.app {
 
 # 2. THE ORCHESTRATOR API (The Remote Control)
 api.epicglobal.app {
-    reverse_proxy localhost:4000
+    reverse_proxy localhost:4000 {
+        transport http {
+            dial_timeout    360s
+            read_timeout    360s
+            write_timeout   360s
+        }
+    }
 }
 
 # 3. WILDCARD FOR YOUR PROJECTS (Optional but powerful)
