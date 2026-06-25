@@ -473,13 +473,10 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   // Refresh vault secrets in case they were updated since last deploy
   writeVaultEnv(projectName, candidatePath);
   const cmd = 'cd ' + quoteForShell(candidatePath) +
-    ' && npm install --no-audit --no-fund' +
-    ' && npm run build --if-present' +
+    ' && corepack enable && pnpm install --frozen-lockfile' +
+    ' && pnpm --filter @workspace/epicodespace run build' +
     ' && { pm2 delete ' + quoteForShell(candidateName) + ' 2>/dev/null || true; }' +
-    ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
-    '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
-    '; elif [ -d .next ]; then PORT=' + candidatePort + ' pm2 start ' + quoteForShell('npx next start --port ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
-    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; fi' +
+    ' && PORT=6105 pm2 start artifacts/epicodespace/serve.mjs --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
   const { stdout, stderr } = await execPromise(cmd);
@@ -532,13 +529,10 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
 
   // Step 3: Install, build, start
   const buildCmd = 'cd ' + quoteForShell(deployPath) +
-    ' && npm install --no-audit --no-fund' +
-    ' && npm run build --if-present' +
+    ' && corepack enable && pnpm install --frozen-lockfile' +
+    ' && pnpm --filter @workspace/epicodespace run build' +
     ' && { pm2 delete ' + quoteForShell(projectName) + ' 2>/dev/null || true; }' +
-    ' && if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
-    '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
-    '; elif [ -d .next ]; then PORT=' + port + ' pm2 start ' + quoteForShell('npx next start --port ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
-    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi' +
+    ' && PORT=6105 pm2 start artifacts/epicodespace/serve.mjs --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
   const { stdout: buildOut, stderr: buildErr } = await execPromise(buildCmd);
