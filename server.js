@@ -474,7 +474,7 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   writeVaultEnv(projectName, candidatePath);
   const isEpicodespace = projectName === 'epicodespace' || projectName === 'nexusdirector';
   const installAndBuild = isEpicodespace
-    ? ' && npm install -g pnpm@10 --force && pnpm install --no-frozen-lockfile && pnpm --filter @workspace/epicodespace run build'
+    ? ' && npm install -g pnpm@10 --force && pnpm install --no-frozen-lockfile && ' + (projectName === 'nexusdirector' ? 'pnpm run build' : 'pnpm --filter @workspace/epicodespace run build')
     : ' && npm install --no-audit --no-fund && npm run build --if-present';
   const serveCmd = isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs')
@@ -536,7 +536,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   // Step 3: Install, build, start
   const isEpicodespace = projectName === 'epicodespace' || projectName === 'nexusdirector';
   const firstInstallAndBuild = isEpicodespace
-    ? ' && npm install -g pnpm@10 --force && pnpm install --no-frozen-lockfile && pnpm --filter @workspace/epicodespace run build'
+    ? ' && npm install -g pnpm@10 --force && pnpm install --no-frozen-lockfile && ' + (projectName === 'nexusdirector' ? 'pnpm run build' : 'pnpm --filter @workspace/epicodespace run build')
     : ' && npm install --no-audit --no-fund && npm run build --if-present';
   const firstServeCmd = isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs')
