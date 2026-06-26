@@ -476,7 +476,7 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
     ' && corepack enable && pnpm install --frozen-lockfile' +
     ' && pnpm --filter @workspace/epicodespace run build' +
     ' && { pm2 delete ' + quoteForShell(candidateName) + ' 2>/dev/null || true; }' +
-    ' && PORT=6105 pm2 start artifacts/epicodespace/serve.mjs --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) +
+    ' && pm2 start /usr/bin/bash --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs') +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
   const { stdout, stderr } = await execPromise(cmd);
@@ -497,7 +497,7 @@ async function promoteCandidate(projectName, candidateName, candidatePath, stabl
   // Stop candidate PM2 entry and start stable
   try { await execPromise('pm2 delete ' + quoteForShell(candidateName)); } catch (e) {}
 
-  const cmd = 'PORT=6105 pm2 start artifacts/epicodespace/serve.mjs --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath);
+  const cmd = 'pm2 start /usr/bin/bash --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs');
   await execPromise(cmd);
   await execPromise('pm2 save');
 }
@@ -529,7 +529,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
     ' && corepack enable && pnpm install --frozen-lockfile' +
     ' && pnpm --filter @workspace/epicodespace run build' +
     ' && { pm2 delete ' + quoteForShell(projectName) + ' 2>/dev/null || true; }' +
-    ' && PORT=6105 pm2 start artifacts/epicodespace/serve.mjs --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) +
+    ' && pm2 start /usr/bin/bash --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs') +
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
   const { stdout: buildOut, stderr: buildErr } = await execPromise(buildCmd);
