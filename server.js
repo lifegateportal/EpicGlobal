@@ -474,7 +474,7 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   writeVaultEnv(projectName, candidatePath);
   const isEpicodespace = projectName === 'epicodespace';
   const installAndBuild = isEpicodespace
-    ? ' && corepack enable pnpm@10 && pnpm install --frozen-lockfile && pnpm --filter @workspace/epicodespace run build'
+    ? ' && npm install -g pnpm@10 && pnpm install --frozen-lockfile && pnpm --filter @workspace/epicodespace run build'
     : ' && npm install --no-audit --no-fund && npm run build --if-present';
   const serveCmd = isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs')
@@ -536,9 +536,7 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   // Step 3: Install, build, start
   const isEpicodespace = projectName === 'epicodespace';
   const firstInstallAndBuild = isEpicodespace
-    ? ' && corepack enable pnpm@10 && pnpm install --frozen-lockfile && pnpm --filter @workspace/epicodespace run build'
-    : ' && npm install --no-audit --no-fund && npm run build --if-present';
-  const firstServeCmd = isEpicodespace
+    ? ' && npm install -g pnpm@10 && pnpm install --frozen-lockfile && pnpm --filter @workspace/epicodespace run build' = isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + ' -- -c ' + quoteForShell('PORT=6105 node artifacts/epicodespace/serve.mjs')
     : 'if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; elif [ -d .next ]; then PORT=' + port + ' pm2 start ' + quoteForShell('node .next/standalone/server.js') + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi';
   const buildCmd = 'cd ' + quoteForShell(deployPath) +
