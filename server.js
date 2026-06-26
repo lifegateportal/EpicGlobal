@@ -497,10 +497,7 @@ async function promoteCandidate(projectName, candidateName, candidatePath, stabl
   // Stop candidate PM2 entry and start stable
   try { await execPromise('pm2 delete ' + quoteForShell(candidateName)); } catch (e) {}
 
-  const cmd = 'if [ -d ' + quoteForShell(stablePath + '/dist') + ' ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
-    '; elif [ -d ' + quoteForShell(stablePath + '/build') + ' ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
-    '; elif [ -d ' + quoteForShell(stablePath + '/.next') + ' ]; then PORT=' + stablePort + ' pm2 start ' + quoteForShell('npx next start --port ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) +
-    '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; fi';
+  const cmd = 'PORT=6105 pm2 start artifacts/epicodespace/serve.mjs --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath);
   await execPromise(cmd);
   await execPromise('pm2 save');
 }
