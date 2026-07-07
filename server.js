@@ -137,6 +137,32 @@ function quoteForShell(val) {
   return "'" + String(val).replace(/'/g, "'\\''") + "'";
 }
 
+async function reloadCaddy() {
+  // Validate config when caddy CLI is available, then try common service managers.
+  await execPromise('if command -v caddy >/dev/null 2>&1; then caddy validate --config ' + quoteForShell(CADDYFILE_PATH) + ' --adapter caddyfile; fi');
+
+  const attempts = [
+    'systemctl reload caddy',
+    'sudo systemctl reload caddy',
+    'service caddy reload',
+    'sudo service caddy reload',
+    'caddy reload --config ' + quoteForShell(CADDYFILE_PATH) + ' --adapter caddyfile'
+  ];
+
+  const errors = [];
+  for (const cmd of attempts) {
+    try {
+      await execPromise(cmd);
+      return;
+    } catch (e) {
+      const msg = [e.stderr, e.stdout, e.message].filter(Boolean).join('\n').trim() || 'failed';
+      errors.push(cmd + ' => ' + msg);
+    }
+  }
+
+  throw new Error('Unable to reload Caddy. Attempts:\n' + errors.join('\n'));
+}
+
 function normalizeProjectName(val) {
   return String(val || '')
     .trim()
@@ -674,7 +700,7 @@ async function executeOrchestratorDeploy(payload) {
 
     const finalRegistry = getRegistry();
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(finalRegistry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await reloadCaddy();
 
     const strategy = existingProject ? 'blue-green' : 'first-deploy';
     appendHistory(projectName, 'success', { port: port, url: url, repoUrl: repoUrl, strategy: strategy });
@@ -1009,7 +1035,7 @@ app.post('/api/orchestrator/delete', async (req, res) => {
     saveRegistry(registry);
 
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await reloadCaddy();
     await execPromise('pm2 save');
 
     appendHistory(projectName, 'deleted', {});
@@ -1101,7 +1127,7 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
 
     // Rebuild Caddy config to serve static files directly
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+  await reloadCaddy();
 
     const url = domain ? 'https://' + domain : 'https://' + projectName + '.epicglobal.app';
     appendHistory(projectName, 'success', { url, strategy: 'static-upload' });
@@ -1317,7 +1343,7 @@ app.post('/api/orchestrator/rename', async (req, res) => {
     saveRegistry(registry);
 
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await reloadCaddy();
 
     appendHistory(newName, 'success', { url: 'https://' + newName + '.epicglobal.app', strategy: 'rename' });
 
@@ -1651,7 +1677,7 @@ app.post('/api/orchestrator/backups/restore', async (req, res) => {
       await execPromise('cp -a ' + quoteForShell(path.join(backupDir, 'epic-deployments')) + ' ' + quoteForShell(DEPLOY_ROOT));
     }
 
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await reloadCaddy();
     await execPromise('pm2 save');
 
     return res.json({
@@ -1917,7 +1943,7 @@ async function reconcileRegistryWithPM2() {
 
   try {
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await reloadCaddy();
   } catch (e) {
     errors.push('caddy reload: ' + e.message);
   }
@@ -1973,7 +1999,7 @@ app.post('/api/orchestrator/cleanup', async (req, res) => {
     saveRegistry({ nextPort: 5100, projects: {} });
 
     fs.writeFileSync(CADDYFILE_PATH, 'api.epicglobal.app {\n  reverse_proxy localhost:4000\n}\n');
-    await execPromise('systemctl reload caddy || sudo systemctl reload caddy');
+    await reloadCaddy();
 
     res.json({
       success: true,
