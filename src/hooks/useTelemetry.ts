@@ -54,7 +54,9 @@ export function useTelemetry(enabled: boolean): TelemetryState {
     setConnectionStatusDetail(`Connecting to ${BASE_URL}`);
 
     const socket = io(BASE_URL, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
+      upgrade: true,
+      path: '/socket.io',
       timeout: 10000,
       autoConnect: false,
     });
@@ -117,6 +119,11 @@ export function useTelemetry(enabled: boolean): TelemetryState {
         const data = await res.json();
         if (!cancelled && data?.success && data?.telemetry) {
           appendPoint(normalizeTelemetry(data.telemetry));
+          setServerConnected(true);
+          setConnectionStatusLabel((prev) => (prev === 'Connected' ? prev : 'Connected'));
+          setConnectionStatusDetail((prev) => (
+            prev.startsWith('Connected to ') ? prev : `Connected to ${BASE_URL} (HTTP polling fallback)`
+          ));
         }
       } catch {
         // Silent; WebSocket connection may still be active.

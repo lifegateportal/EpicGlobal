@@ -137,6 +137,32 @@ function quoteForShell(val) {
   return "'" + String(val).replace(/'/g, "'\\''") + "'";
 }
 
+async function assertSufficientDeployDiskSpace(requiredKb = 1024 * 1024) {
+  // df -Pk output is stable and reports available space in 1K blocks.
+  const { stdout } = await execPromise(
+    'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+    ' && df -Pk ' + quoteForShell(DEPLOY_ROOT)
+  );
+  const lines = String(stdout || '').trim().split('\n').filter(Boolean);
+  const last = lines.length > 0 ? lines[lines.length - 1].trim() : '';
+  const cols = last.split(/\s+/);
+  const availableKb = Number(cols[3]);
+
+  if (!Number.isFinite(availableKb)) {
+    throw new Error('Could not determine free disk space for ' + DEPLOY_ROOT + '.');
+  }
+
+  if (availableKb < requiredKb) {
+    const freeMb = Math.floor(availableKb / 1024);
+    const minMb = Math.floor(requiredKb / 1024);
+    throw new Error(
+      'Insufficient disk space in ' + DEPLOY_ROOT +
+      '. Free: ' + freeMb + ' MB, required at least: ' + minMb +
+      ' MB. Run server cleanup before retrying deployment.'
+    );
+  }
+}
+
 async function reloadCaddy() {
   // Validate config when caddy CLI is available, then try common service managers.
   await execPromise('if command -v caddy >/dev/null 2>&1; then caddy validate --config ' + quoteForShell(CADDYFILE_PATH) + ' --adapter caddyfile; fi');
@@ -496,9 +522,10 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
   const stablePath = path.join(DEPLOY_ROOT, projectName);
+  await assertSufficientDeployDiskSpace();
   const cloneCandCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(candidatePath) +
-    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
+    ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
     ' && if [ -f ' + quoteForShell(stablePath + '/.env') + ' ]; then cp ' + quoteForShell(stablePath + '/.env') + ' ' + quoteForShell(candidatePath + '/.env') + '; fi' +
     ' && if [ -f ' + quoteForShell(stablePath + '/.env.local') + ' ]; then cp ' + quoteForShell(stablePath + '/.env.local') + ' ' + quoteForShell(candidatePath + '/.env.local') + '; fi';
   await execPromise(cloneCandCmd);
@@ -557,9 +584,10 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   const deployPath = path.join(DEPLOY_ROOT, projectName);
 
   // Step 1: Clone
+  await assertSufficientDeployDiskSpace();
   const cloneCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
     ' && rm -rf ' + quoteForShell(deployPath) +
-    ' && git clone --depth 1 ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath);
+    ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath);
   const { stdout: cloneOut, stderr: cloneErr } = await execPromise(cloneCmd);
   let output = [cloneOut, cloneErr].filter(Boolean).join('\n').trim();
 
