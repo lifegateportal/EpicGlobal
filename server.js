@@ -109,6 +109,11 @@ const ORCHESTRATOR_API_KEY = (process.env.ORCHESTRATOR_API_KEY || '').trim() || 
 })();
 
 function requireApiKey(req, res, next) {
+  // Allow read-only telemetry snapshot without API key for dashboard connectivity status.
+  if (req.method === 'GET' && req.path === '/telemetry') {
+    return next();
+  }
+
   const header = req.headers['x-api-key'] || req.headers['authorization'];
   const provided = header ? header.replace(/^Bearer\s+/i, '') : null;
   if (!provided || provided !== ORCHESTRATOR_API_KEY) {
