@@ -22,6 +22,8 @@ const crypto = require('crypto');
 const { Server } = require('socket.io');
 const multer = require('multer');
 const unzipper = require('unzipper');
+const { Transform } = require('stream');
+const { pipeline } = require('stream/promises');
 
 const execPromise = util.promisify(exec);
 
@@ -218,6 +220,253 @@ function validateUrl(url) {
   } catch {
     return false;
   }
+}
+
+const NEXUS_ARCHIVE_MAX_BYTES = 8_000_000;
+const NEXUS_SOURCE_MAX_BYTES = 8_000_000;
+
+function validateNexusArchivePath(rawPath) {
+  if (
+    typeof rawPath !== 'string'
+    || !rawPath
+    || rawPath.length > 1000
+    || rawPath.startsWith('/')
+    || rawPath.includes('\\')
+    || /[\u0000-\u001f]/.test(rawPath)
+    || /^[a-zA-Z]:/.test(rawPath)
+  ) {
+    throw new Error('Project archive contains an unsafe file path.');
+  }
+
+  const normalized = rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
+  const segments = normalized.split('/');
+  if (
+    !normalized
+    || segments.some((segment) => !segment || segment === '.' || segment === '..')
+    || segments.some((segment) => /^\.env(?:$|\.(?!example$))/i.test(segment))
+  ) {
+    throw new Error('Project archive contains an unsafe or secret file path.');
+  }
+  return normalized;
+}
+
+function validateNexusArchive(archive) {
+  if (!Buffer.isBuffer(archive) || archive.length < 22 || archive.length > NEXUS_ARCHIVE_MAX_BYTES) {
+    throw new Error('Project archive is missing or exceeds the 8 MB upload limit.');
+  }
+
+  let endOfCentralDirectory = -1;
+  const searchStart = Math.max(0, archive.length - 65_557);
+  for (let offset = archive.length - 22; offset >= searchStart; offset -= 1) {
+    if (archive.readUInt32LE(offset) === 0x06054b50) {
+      endOfCentralDirectory = offset;
+      break;
+    }
+  }
+  if (endOfCentralDirectory < 0) throw new Error('Project archive is not a valid ZIP file.');
+
+  const diskNumber = archive.readUInt16LE(endOfCentralDirectory + 4);
+  const centralDisk = archive.readUInt16LE(endOfCentralDirectory + 6);
+  const entriesOnDisk = archive.readUInt16LE(endOfCentralDirectory + 8);
+  const entryCount = archive.readUInt16LE(endOfCentralDirectory + 10);
+  const centralSize = archive.readUInt32LE(endOfCentralDirectory + 12);
+  const centralOffset = archive.readUInt32LE(endOfCentralDirectory + 16);
+  const commentLength = archive.readUInt16LE(endOfCentralDirectory + 20);
+  const centralEnd = centralOffset + centralSize;
+
+  if (
+    diskNumber !== 0
+    || centralDisk !== 0
+    || entriesOnDisk !== entryCount
+    || entryCount === 0
+    || entryCount > 2000
+    || entryCount === 0xffff
+    || centralSize === 0xffffffff
+    || centralOffset === 0xffffffff
+    || centralEnd !== endOfCentralDirectory
+    || endOfCentralDirectory + 22 + commentLength !== archive.length
+  ) {
+    throw new Error('Project archive uses an unsupported or invalid ZIP layout.');
+  }
+
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const entries = [];
+  const seenPaths = new Set();
+  const filePaths = new Set();
+  let totalUncompressedBytes = 0;
+  let offset = centralOffset;
+
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > centralEnd || archive.readUInt32LE(offset) !== 0x02014b50) {
+      throw new Error('Project archive has an invalid directory entry.');
+    }
+    const hostSystem = archive.readUInt16LE(offset + 4) >> 8;
+    const flags = archive.readUInt16LE(offset + 8);
+    const compressionMethod = archive.readUInt16LE(offset + 10);
+    const compressedSize = archive.readUInt32LE(offset + 20);
+    const uncompressedSize = archive.readUInt32LE(offset + 24);
+    const fileNameLength = archive.readUInt16LE(offset + 28);
+    const extraLength = archive.readUInt16LE(offset + 30);
+    const fileCommentLength = archive.readUInt16LE(offset + 32);
+    const diskStart = archive.readUInt16LE(offset + 34);
+    const externalAttributes = archive.readUInt32LE(offset + 38);
+    const localHeaderOffset = archive.readUInt32LE(offset + 42);
+    const nextOffset = offset + 46 + fileNameLength + extraLength + fileCommentLength;
+
+    if (
+      nextOffset > centralEnd
+      || diskStart !== 0
+      || localHeaderOffset >= centralOffset
+      || compressedSize === 0xffffffff
+      || uncompressedSize === 0xffffffff
+      || (flags & 1) !== 0
+      || ![0, 8].includes(compressionMethod)
+    ) {
+      throw new Error('Project archive contains an unsupported ZIP entry.');
+    }
+
+    let rawPath;
+    try {
+      rawPath = decoder.decode(archive.subarray(offset + 46, offset + 46 + fileNameLength));
+    } catch {
+      throw new Error('Project archive file paths must use UTF-8.');
+    }
+    const normalizedPath = validateNexusArchivePath(rawPath);
+    const fileType = hostSystem === 3 ? (externalAttributes >>> 16) & 0o170000 : 0;
+    if (fileType && fileType !== 0o100000 && fileType !== 0o040000) {
+      throw new Error('Project archive may not contain symbolic links or special files.');
+    }
+    const isDirectory = rawPath.endsWith('/') || fileType === 0o040000;
+    if (seenPaths.has(normalizedPath)) throw new Error('Project archive contains duplicate file paths.');
+    seenPaths.add(normalizedPath);
+    if (!isDirectory) filePaths.add(normalizedPath);
+
+    totalUncompressedBytes += uncompressedSize;
+    if (totalUncompressedBytes > NEXUS_SOURCE_MAX_BYTES) {
+      throw new Error('Project archive expands beyond the 8 MB source limit.');
+    }
+    entries.push({ path: normalizedPath, isDirectory, uncompressedSize });
+    offset = nextOffset;
+  }
+
+  if (offset !== centralEnd) throw new Error('Project archive directory is malformed.');
+  for (const entry of entries) {
+    const segments = entry.path.split('/');
+    for (let index = 1; index < segments.length; index += 1) {
+      if (filePaths.has(segments.slice(0, index).join('/'))) {
+        throw new Error('Project archive contains conflicting file and directory paths.');
+      }
+    }
+  }
+  return entries;
+}
+
+async function extractNexusArchive(archive, destination) {
+  const entries = validateNexusArchive(archive);
+  const zipDirectory = await unzipper.Open.buffer(archive);
+  if (zipDirectory.files.length !== entries.length) {
+    throw new Error('Project archive has an inconsistent directory listing.');
+  }
+
+  let actualBytes = 0;
+  for (const [index, zipEntry] of zipDirectory.files.entries()) {
+    const metadata = entries[index];
+    const entryPath = validateNexusArchivePath(zipEntry.path);
+    const isDirectory = zipEntry.type === 'Directory' || zipEntry.path.endsWith('/');
+    if (entryPath !== metadata.path || isDirectory !== metadata.isDirectory) {
+      throw new Error('Project archive directory listing does not match its contents.');
+    }
+
+    const target = path.resolve(destination, metadata.path);
+    if (!target.startsWith(path.resolve(destination) + path.sep)) {
+      throw new Error('Project archive contains an unsafe file path.');
+    }
+    if (metadata.isDirectory) {
+      await fs.promises.mkdir(target, { recursive: true, mode: 0o755 });
+      continue;
+    }
+
+    await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+    let fileBytes = 0;
+    const sizeLimit = new Transform({
+      transform(chunk, encoding, callback) {
+        fileBytes += chunk.length;
+        actualBytes += chunk.length;
+        if (fileBytes > metadata.uncompressedSize || actualBytes > NEXUS_SOURCE_MAX_BYTES) {
+          callback(new Error('Project archive expands beyond its declared source size.'));
+          return;
+        }
+        callback(null, chunk);
+      }
+    });
+    await pipeline(
+      zipEntry.stream(),
+      sizeLimit,
+      fs.createWriteStream(target, { flags: 'wx', mode: 0o644 })
+    );
+    if (fileBytes !== metadata.uncompressedSize) {
+      throw new Error('Project archive contents do not match their declared size.');
+    }
+  }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(await fs.promises.readFile(path.join(destination, 'package.json'), 'utf8'));
+  } catch {
+    throw new Error('The uploaded project does not have a valid root package.json.');
+  }
+  if (typeof manifest?.scripts?.start !== 'string' || !manifest.scripts.start.trim()) {
+    throw new Error('Add a start script to package.json before deploying the full-stack app.');
+  }
+}
+
+function parseNexusEnvironment(rawEnvironment) {
+  let environment;
+  try {
+    environment = JSON.parse(rawEnvironment || '{}');
+  } catch {
+    throw new Error('Runtime environment variables must be valid JSON.');
+  }
+  if (!environment || typeof environment !== 'object' || Array.isArray(environment)) {
+    throw new Error('Runtime environment variables must be an object.');
+  }
+  const entries = Object.entries(environment);
+  if (entries.length > 50) throw new Error('No more than 50 runtime variables are allowed.');
+  let totalBytes = 0;
+  for (const [key, value] of entries) {
+    if (
+      !/^[A-Z_][A-Z0-9_]{0,127}$/.test(key)
+      || ['PORT', 'HOST', 'NODE_ENV', 'PATH', 'HOME'].includes(key)
+      || typeof value !== 'string'
+      || value.length > 8000
+      || /[\r\n\0]/.test(value)
+    ) {
+      throw new Error(`Runtime variable ${key} is invalid.`);
+    }
+    totalBytes += Buffer.byteLength(`${key}=${value}`, 'utf8');
+  }
+  if (totalBytes > 32_000) throw new Error('Runtime variables must total less than 32 KB.');
+  return environment;
+}
+
+function nexusProcessEnvironment(environment, port) {
+  return {
+    ...process.env,
+    ...environment,
+    NODE_ENV: 'production',
+    PORT: String(port)
+  };
+}
+
+function redactNexusEnvironment(output, environment) {
+  let redacted = String(output || '');
+  Object.values(environment || {})
+    .filter((value) => typeof value === 'string' && value.length >= 4)
+    .sort((left, right) => right.length - left.length)
+    .forEach((value) => {
+      redacted = redacted.split(value).join('[redacted]');
+    });
+  return redacted;
 }
 
 function getRegistry() {
@@ -522,25 +771,34 @@ function writeVaultEnv(projectName, deployPath) {
 
 // Build and start a candidate PM2 process for a project.
 // Returns { stdout, stderr, candidateName, candidatePath }.
-async function buildCandidate(projectName, repoUrl, candidatePort) {
+async function buildCandidate(projectName, repoUrl, candidatePort, sourceDir = null, runtimeEnvironment = {}) {
   const candidateName = projectName + '-candidate';
   const candidatePath = path.join(DEPLOY_ROOT, candidateName);
 
   const stablePath = path.join(DEPLOY_ROOT, projectName);
   await assertSufficientDeployDiskSpace();
-  const cloneCandCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
-    ' && rm -rf ' + quoteForShell(candidatePath) +
-    ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
-    ' && if [ -f ' + quoteForShell(stablePath + '/.env') + ' ]; then cp ' + quoteForShell(stablePath + '/.env') + ' ' + quoteForShell(candidatePath + '/.env') + '; fi' +
-    ' && if [ -f ' + quoteForShell(stablePath + '/.env.local') + ' ]; then cp ' + quoteForShell(stablePath + '/.env.local') + ' ' + quoteForShell(candidatePath + '/.env.local') + '; fi';
+  const cloneCandCmd = sourceDir
+    ? 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+      ' && rm -rf ' + quoteForShell(candidatePath) +
+      ' && mkdir -p ' + quoteForShell(candidatePath) +
+      ' && cp -a ' + quoteForShell(path.join(sourceDir, '.')) + ' ' + quoteForShell(candidatePath)
+    : 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+      ' && rm -rf ' + quoteForShell(candidatePath) +
+      ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
+      ' && if [ -f ' + quoteForShell(stablePath + '/.env') + ' ]; then cp ' + quoteForShell(stablePath + '/.env') + ' ' + quoteForShell(candidatePath + '/.env') + '; fi' +
+      ' && if [ -f ' + quoteForShell(stablePath + '/.env.local') + ' ]; then cp ' + quoteForShell(stablePath + '/.env.local') + ' ' + quoteForShell(candidatePath + '/.env.local') + '; fi';
   await execPromise(cloneCandCmd);
   // Refresh vault secrets in case they were updated since last deploy
-  writeVaultEnv(projectName, candidatePath);
+  if (!sourceDir) writeVaultEnv(projectName, candidatePath);
   const isEpicodespace = projectName === 'epicodespace' || projectName === 'nexusdirector';
-  const installAndBuild = isEpicodespace
+  const installAndBuild = sourceDir
+    ? ' && npm install --no-audit --no-fund && npm run build --if-present'
+    : isEpicodespace
     ? ' && npm install -g pnpm@10 --force && pnpm install --no-frozen-lockfile && ' + (projectName === 'nexusdirector' ? 'pnpm run build' : 'pnpm --filter @workspace/epicodespace run build')
     : ' && npm install --no-audit --no-fund && npm run build --if-present';
-  const serveCmd = isEpicodespace
+  const serveCmd = sourceDir
+    ? 'pm2 start npm --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + ' -- start'
+    : isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + ' -- -c ' + quoteForShell(projectName === 'nexusdirector' ? 'node_modules/.bin/next start -p ' + candidatePort : 'PORT=' + candidatePort + ' node artifacts/epicodespace/serve.mjs')
     : 'if [ -d ' + quoteForShell(candidatePath + '/dist') + ' ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; elif [ -d ' + quoteForShell(candidatePath + '/build') + ' ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; elif [ -d ' + quoteForShell(candidatePath + '/.next') + ' ]; then PORT=' + candidatePort + ' pm2 start ' + quoteForShell('node .next/standalone/server.js') + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + candidatePort) + ' --name ' + quoteForShell(candidateName) + ' --cwd ' + quoteForShell(candidatePath) + '; fi';
   const cmd = 'cd ' + quoteForShell(candidatePath) +
@@ -549,12 +807,35 @@ async function buildCandidate(projectName, repoUrl, candidatePort) {
     ' && ' + serveCmd +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
 
+  if (sourceDir) {
+    const buildResult = await execPromise(
+      'cd ' + quoteForShell(candidatePath) + installAndBuild,
+      { timeout: 8 * 60 * 1000, maxBuffer: 2_000_000 }
+    );
+    const startResult = await execPromise(
+      '{ pm2 delete ' + quoteForShell(candidateName) + ' 2>/dev/null || true; }' +
+      ' && ' + serveCmd +
+      ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT),
+      {
+        env: nexusProcessEnvironment(runtimeEnvironment, candidatePort),
+        timeout: 30_000,
+        maxBuffer: 256_000
+      }
+    );
+    return {
+      stdout: [buildResult.stdout, startResult.stdout].filter(Boolean).join('\n'),
+      stderr: [buildResult.stderr, startResult.stderr].filter(Boolean).join('\n'),
+      candidateName,
+      candidatePath
+    };
+  }
+
   const { stdout, stderr } = await execPromise(cmd);
   return { stdout, stderr, candidateName, candidatePath };
 }
 
 // Promote candidate: stop old PM2 app, move files, restart under stable name.
-async function promoteCandidate(projectName, candidateName, candidatePath, stablePort) {
+async function promoteCandidate(projectName, candidateName, candidatePath, stablePort, sourceDir = null, runtimeEnvironment = {}) {
   const stablePath = path.join(DEPLOY_ROOT, projectName);
   const serverPort = getProjectUpstreamPort(projectName, stablePort);
 
@@ -569,10 +850,20 @@ async function promoteCandidate(projectName, candidateName, candidatePath, stabl
   try { await execPromise('pm2 delete ' + quoteForShell(candidateName)); } catch (e) {}
 
   const isEpicodespace = projectName === 'epicodespace' || projectName === 'nexusdirector';
-  const promoteCmd = isEpicodespace
+  const promoteCmd = sourceDir
+    ? 'pm2 start npm --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + ' -- start'
+    : isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + ' -- -c ' + quoteForShell(projectName === 'nexusdirector' ? 'node_modules/.bin/next start -p ' + stablePort : 'PORT=' + serverPort + ' node artifacts/epicodespace/serve.mjs')
     : 'if [ -d ' + quoteForShell(stablePath + '/dist') + ' ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; elif [ -d ' + quoteForShell(stablePath + '/build') + ' ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; elif [ -d ' + quoteForShell(stablePath + '/.next') + ' ]; then PORT=' + stablePort + ' pm2 start ' + quoteForShell('node .next/standalone/server.js') + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + stablePort) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(stablePath) + '; fi';
-  await execPromise(promoteCmd);
+  if (sourceDir) {
+    await execPromise(promoteCmd, {
+      env: nexusProcessEnvironment(runtimeEnvironment, stablePort),
+      timeout: 30_000,
+      maxBuffer: 256_000
+    });
+  } else {
+    await execPromise(promoteCmd);
+  }
   await execPromise('pm2 save');
 }
 
@@ -585,19 +876,24 @@ async function rollbackCandidate(candidateName, candidatePath) {
 // ---------------------------------------------------------
 // DEPLOY LOGIC: First deploy (no existing project)
 // ---------------------------------------------------------
-async function executeFirstDeploy(projectName, repoUrl, domain, port) {
+async function executeFirstDeploy(projectName, repoUrl, domain, port, sourceDir = null, runtimeEnvironment = {}) {
   const deployPath = path.join(DEPLOY_ROOT, projectName);
 
-  // Step 1: Clone
+  // Step 1: Clone or stage an uploaded project snapshot.
   await assertSufficientDeployDiskSpace();
-  const cloneCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
-    ' && rm -rf ' + quoteForShell(deployPath) +
-    ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath);
+  const cloneCmd = sourceDir
+    ? 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+      ' && rm -rf ' + quoteForShell(deployPath) +
+      ' && mkdir -p ' + quoteForShell(deployPath) +
+      ' && cp -a ' + quoteForShell(path.join(sourceDir, '.')) + ' ' + quoteForShell(deployPath)
+    : 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+      ' && rm -rf ' + quoteForShell(deployPath) +
+      ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath);
   const { stdout: cloneOut, stderr: cloneErr } = await execPromise(cloneCmd);
   let output = [cloneOut, cloneErr].filter(Boolean).join('\n').trim();
 
   // Step 2: Write vault secrets to .env.local so they are available during build
-  output += writeVaultEnv(projectName, deployPath);
+  if (!sourceDir) output += writeVaultEnv(projectName, deployPath);
 
   // Step 3: Install, build, start
   const isEpicodespace = projectName === 'epicodespace' || projectName === 'nexusdirector';
@@ -605,7 +901,9 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
   const firstInstallAndBuild = isEpicodespace
     ? ' && npm install -g pnpm@10 --force && pnpm install --no-frozen-lockfile && ' + (projectName === 'nexusdirector' ? 'pnpm run build' : 'pnpm --filter @workspace/epicodespace run build')
     : ' && npm install --no-audit --no-fund && npm run build --if-present';
-  const firstServeCmd = isEpicodespace
+  const firstServeCmd = sourceDir
+    ? 'pm2 start npm --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + ' -- start'
+    : isEpicodespace
     ? 'pm2 start /usr/bin/bash --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + ' -- -c ' + quoteForShell(projectName === 'nexusdirector' ? 'node_modules/.bin/next start -p ' + port : 'PORT=' + serverPort + ' node artifacts/epicodespace/serve.mjs')
     : 'if [ -d dist ]; then pm2 start ' + quoteForShell('npx serve -s dist -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; elif [ -d build ]; then pm2 start ' + quoteForShell('npx serve -s build -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; elif [ -d .next ]; then PORT=' + port + ' pm2 start ' + quoteForShell('node .next/standalone/server.js') + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; else pm2 start ' + quoteForShell('npx serve -s . -l ' + port) + ' --name ' + quoteForShell(projectName) + ' --cwd ' + quoteForShell(deployPath) + '; fi';
   const buildCmd = 'cd ' + quoteForShell(deployPath) +
@@ -614,7 +912,30 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port) {
     ' && ' + firstServeCmd +
     ' && pm2 save' +
     ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT);
-  const { stdout: buildOut, stderr: buildErr } = await execPromise(buildCmd);
+  if (sourceDir) {
+    const buildResult = await execPromise(
+      'cd ' + quoteForShell(deployPath) + firstInstallAndBuild,
+      { timeout: 8 * 60 * 1000, maxBuffer: 2_000_000 }
+    );
+    const startResult = await execPromise(
+      '{ pm2 delete ' + quoteForShell(projectName) + ' 2>/dev/null || true; }' +
+      ' && ' + firstServeCmd +
+      ' && pm2 save' +
+      ' && chmod -R 755 ' + quoteForShell(DEPLOY_ROOT),
+      {
+        env: nexusProcessEnvironment(runtimeEnvironment, port),
+        timeout: 30_000,
+        maxBuffer: 256_000
+      }
+    );
+    return [output, buildResult.stdout, buildResult.stderr, startResult.stdout, startResult.stderr]
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  const buildResult = await execPromise(buildCmd);
+  const { stdout: buildOut, stderr: buildErr } = buildResult;
   output += '\n' + [buildOut, buildErr].filter(Boolean).join('\n').trim();
   return output;
 }
@@ -623,6 +944,8 @@ async function executeOrchestratorDeploy(payload) {
   const repoUrl = payload.repoUrl;
   const projectName = payload.projectName;
   const domain = payload.domain;
+  const sourceDir = payload.sourceDir || null;
+  const runtimeEnvironment = payload.environment || {};
 
   const registry = getRegistry();
   const existingProject = registry.projects[projectName];
@@ -635,7 +958,8 @@ async function executeOrchestratorDeploy(payload) {
   registry.projects[projectName] = {
     port: port,
     repoUrl: repoUrl,
-    domain: domain || existingProject?.domain || undefined
+    domain: domain || existingProject?.domain || undefined,
+    ...(sourceDir ? { deployType: 'nexus', managedBy: 'nexus-code-direct' } : {})
   };
   saveRegistry(registry);
 
@@ -651,9 +975,16 @@ async function executeOrchestratorDeploy(payload) {
 
       let buildResult;
       try {
-        buildResult = await buildCandidate(projectName, repoUrl, candidatePort);
+        buildResult = await buildCandidate(projectName, repoUrl, candidatePort, sourceDir, runtimeEnvironment);
       } catch (buildError) {
-        const errOut = [buildError.stdout, buildError.stderr, buildError.message].filter(Boolean).join('\n').trim();
+        const errOut = redactNexusEnvironment(
+          [buildError.stdout, buildError.stderr, buildError.message].filter(Boolean).join('\n').trim(),
+          runtimeEnvironment
+        );
+        await rollbackCandidate(
+          projectName + '-candidate',
+          path.join(DEPLOY_ROOT, projectName + '-candidate')
+        );
         appendHistory(projectName, 'failed', {
           error: errOut,
           repoUrl: repoUrl,
@@ -672,6 +1003,7 @@ async function executeOrchestratorDeploy(payload) {
       }
 
       output = [buildResult.stdout, buildResult.stderr].filter(Boolean).join('\n').trim();
+      output = redactNexusEnvironment(output, runtimeEnvironment);
 
       // Health probe — 15 attempts, 3s apart (Next.js needs longer to boot)
       const healthy = await probeHealth(candidatePort, 15, 3000);
@@ -697,23 +1029,37 @@ async function executeOrchestratorDeploy(payload) {
       }
 
       // Promote candidate to stable
-      await promoteCandidate(projectName, buildResult.candidateName, buildResult.candidatePath, port);
+      await promoteCandidate(projectName, buildResult.candidateName, buildResult.candidatePath, port, sourceDir, runtimeEnvironment);
       output += '\n' + logPrefix + 'health OK. Promoted to stable.';
 
     } else {
       // ---- FIRST-DEPLOY PATH ----
-      output = await executeFirstDeploy(projectName, repoUrl, domain, port);
+      try {
+        output = await executeFirstDeploy(projectName, repoUrl, domain, port, sourceDir, runtimeEnvironment);
+      } catch (buildError) {
+        if (sourceDir) {
+          try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (cleanupError) {
+            console.error('[nexus-deploy] Could not remove failed PM2 process:', cleanupError);
+          }
+          try { await fs.promises.rm(path.join(DEPLOY_ROOT, projectName), { recursive: true, force: true }); } catch (cleanupError) {
+            console.error('[nexus-deploy] Could not remove failed deployment files:', cleanupError);
+          }
+        }
+        throw buildError;
+      }
+      output = redactNexusEnvironment(output, runtimeEnvironment);
       const healthPort = getProjectUpstreamPort(projectName, port);
 
       // Health probe — give the serve process up to 15s to start responding.
-      const healthy = await probeHealth(healthPort, 5, 3000);
+      const healthAttempts = sourceDir ? 15 : 5;
+      const healthy = await probeHealth(healthPort, healthAttempts, 3000);
       if (!healthy) {
         // PM2 started but serve isn't responding — tear down and fail cleanly.
         // Keep the registry entry so the user can set env vars and redeploy.
         try { await execPromise('pm2 delete ' + quoteForShell(projectName)); } catch (_) {}
         try { await execPromise('rm -rf ' + quoteForShell(path.join(DEPLOY_ROOT, projectName))); } catch (_) {}
         appendHistory(projectName, 'failed', {
-          error: 'Process started but did not respond on port ' + healthPort + ' after 15 s.',
+          error: 'Process started but did not respond on port ' + healthPort + ' after ' + (healthAttempts * 3) + ' s.',
           repoUrl,
           strategy: 'first-deploy',
           log: compactLog(output)
@@ -723,7 +1069,9 @@ async function executeOrchestratorDeploy(payload) {
           body: {
             success: false,
             port,
-            error: 'The app started but did not respond within 15 s. Check that your project has a build step that produces a servable output (dist/ or build/ folder with index.html), or that the server process binds to the expected port.',
+            error: sourceDir
+              ? 'The app started but did not respond within 45 s. Check that its start script listens on the provided PORT.'
+              : 'The app started but did not respond within 15 s. Check that your project has a build step that produces a servable output (dist/ or build/ folder with index.html), or that the server process binds to the expected port.',
             terminalOutput: output
           }
         };
@@ -748,7 +1096,10 @@ async function executeOrchestratorDeploy(payload) {
     };
   } catch (error) {
     if (error.statusCode) throw error;
-    const output = [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim();
+    const output = redactNexusEnvironment(
+      [error.stdout, error.stderr, error.message].filter(Boolean).join('\n').trim(),
+      runtimeEnvironment
+    );
     appendHistory(projectName, 'failed', { error: output, repoUrl: repoUrl, log: compactLog(output) });
     sendAlert('deploy', projectName, 'Deploy FAILED: ' + (output.slice(0, 200) || 'unknown error'), 'error').catch(() => {});
 
@@ -1083,6 +1434,107 @@ app.post('/api/orchestrator/delete', async (req, res) => {
 // API: Static File Upload Deploy
 // ---------------------------------------------------------
 const uploadMiddleware = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+const nexusDeployUploadMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: NEXUS_ARCHIVE_MAX_BYTES, files: 1, fields: 3, fieldSize: 80_000 }
+});
+
+app.post('/api/orchestrator/nexus-deploy', (req, res, next) => {
+  nexusDeployUploadMiddleware.single('file')(req, res, (error) => {
+    if (!error) return next();
+    const statusCode = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(statusCode).json({
+      success: false,
+      error: statusCode === 413 ? 'Project archive exceeds the 8 MB upload limit.' : 'Project archive upload is invalid.'
+    });
+  });
+}, async (req, res) => {
+  let sourceDir = null;
+  try {
+    const projectName = normalizeProjectName(req.body?.projectName);
+    if (!/^nx-[a-z0-9-]{8,40}$/.test(projectName)) {
+      return res.status(400).json({ success: false, error: 'A valid Nexus project name is required.' });
+    }
+    if (!req.file || !req.file.originalname.toLowerCase().endsWith('.zip')) {
+      return res.status(400).json({ success: false, error: 'Upload a ZIP archive for the full-stack project.' });
+    }
+
+    let environment;
+    try {
+      environment = parseNexusEnvironment(req.body?.environment);
+    } catch (error) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    try {
+      validateNexusArchive(req.file.buffer);
+    } catch (error) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+
+    if (isProjectBusy(projectName)) {
+      return res.status(409).json({ success: false, error: 'This project already has a running or queued deployment.' });
+    }
+    const currentProject = getRegistry().projects[projectName];
+    if (currentProject && currentProject.managedBy !== 'nexus-code-direct') {
+      return res.status(409).json({
+        success: false,
+        error: 'This project name is already used by another EpicGlobal deployment. Delete it there before deploying from Nexus.'
+      });
+    }
+
+    await assertSufficientDeployDiskSpace();
+    await fs.promises.mkdir(DEPLOY_ROOT, { recursive: true });
+    sourceDir = await fs.promises.mkdtemp(path.join(DEPLOY_ROOT, '.nexus-upload-'));
+    try {
+      await extractNexusArchive(req.file.buffer, sourceDir);
+    } catch (error) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+
+    if (isProjectBusy(projectName)) {
+      return res.status(409).json({ success: false, error: 'This project already has a running or queued deployment.' });
+    }
+    const latestProject = getRegistry().projects[projectName];
+    if (latestProject && latestProject.managedBy !== 'nexus-code-direct') {
+      return res.status(409).json({
+        success: false,
+        error: 'This project name was claimed by another EpicGlobal deployment while the archive was being prepared.'
+      });
+    }
+
+    const result = await enqueueDeploy({
+      projectName,
+      repoUrl: null,
+      domain: '',
+      sourceDir,
+      environment
+    });
+    const terminalOutput = String(result.terminalOutput || '').slice(-250_000);
+    return res.json({ ...result, terminalOutput, log: terminalOutput, projectName });
+  } catch (error) {
+    const statusCode = error?.statusCode || 500;
+    const body = error?.body ? {
+      ...error.body,
+      ...(typeof error.body.error === 'string' ? { error: error.body.error.slice(0, 1000) } : {}),
+      ...(typeof error.body.terminalOutput === 'string'
+        ? { terminalOutput: error.body.terminalOutput.slice(-250_000) }
+        : {})
+    } : {
+      success: false,
+      error: error?.message || 'Full-stack deployment failed.',
+      terminalOutput: error?.message || 'Full-stack deployment failed.'
+    };
+    return res.status(statusCode).json(body);
+  } finally {
+    if (sourceDir) {
+      try {
+        await fs.promises.rm(sourceDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error('[nexus-deploy] Could not remove temporary source directory:', error);
+      }
+    }
+  }
+});
 
 app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req, res) => {
   try {
