@@ -420,6 +420,23 @@ async function extractNexusArchive(archive, destination) {
   }
 }
 
+async function stageNexusProject(sourceDir, destination) {
+  const entries = await fs.promises.readdir(sourceDir);
+  for (const entry of entries) {
+    await fs.promises.cp(
+      path.join(sourceDir, entry),
+      path.join(destination, entry),
+      { recursive: true, force: false, errorOnExist: true }
+    );
+  }
+
+  try {
+    await fs.promises.access(path.join(destination, 'package.json'), fs.constants.R_OK);
+  } catch {
+    throw new Error('EpicGlobal extracted package.json but could not stage it at the project root. The deployment was stopped before npm install.');
+  }
+}
+
 function parseNexusEnvironment(rawEnvironment) {
   let environment;
   try {
@@ -777,17 +794,21 @@ async function buildCandidate(projectName, repoUrl, candidatePort, sourceDir = n
 
   const stablePath = path.join(DEPLOY_ROOT, projectName);
   await assertSufficientDeployDiskSpace();
-  const cloneCandCmd = sourceDir
-    ? 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
-      ' && rm -rf ' + quoteForShell(candidatePath) +
-      ' && mkdir -p ' + quoteForShell(candidatePath) +
-      ' && cp -a ' + quoteForShell(path.join(sourceDir, '.')) + ' ' + quoteForShell(candidatePath)
-    : 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+  const cloneCandCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
       ' && rm -rf ' + quoteForShell(candidatePath) +
       ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(candidatePath) +
       ' && if [ -f ' + quoteForShell(stablePath + '/.env') + ' ]; then cp ' + quoteForShell(stablePath + '/.env') + ' ' + quoteForShell(candidatePath + '/.env') + '; fi' +
       ' && if [ -f ' + quoteForShell(stablePath + '/.env.local') + ' ]; then cp ' + quoteForShell(stablePath + '/.env.local') + ' ' + quoteForShell(candidatePath + '/.env.local') + '; fi';
-  await execPromise(cloneCandCmd);
+  if (sourceDir) {
+    await execPromise(
+      'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+      ' && rm -rf ' + quoteForShell(candidatePath) +
+      ' && mkdir -p ' + quoteForShell(candidatePath)
+    );
+    await stageNexusProject(sourceDir, candidatePath);
+  } else {
+    await execPromise(cloneCandCmd);
+  }
   // Refresh vault secrets in case they were updated since last deploy
   if (!sourceDir) writeVaultEnv(projectName, candidatePath);
   const isEpicodespace = projectName === 'epicodespace' || projectName === 'nexusdirector';
@@ -881,15 +902,23 @@ async function executeFirstDeploy(projectName, repoUrl, domain, port, sourceDir 
 
   // Step 1: Clone or stage an uploaded project snapshot.
   await assertSufficientDeployDiskSpace();
-  const cloneCmd = sourceDir
-    ? 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
-      ' && rm -rf ' + quoteForShell(deployPath) +
-      ' && mkdir -p ' + quoteForShell(deployPath) +
-      ' && cp -a ' + quoteForShell(path.join(sourceDir, '.')) + ' ' + quoteForShell(deployPath)
-    : 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+  const cloneCmd = 'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
       ' && rm -rf ' + quoteForShell(deployPath) +
       ' && git clone --depth 1 --single-branch --no-tags ' + quoteForShell(repoUrl) + ' ' + quoteForShell(deployPath);
-  const { stdout: cloneOut, stderr: cloneErr } = await execPromise(cloneCmd);
+  let cloneOut = '';
+  let cloneErr = '';
+  if (sourceDir) {
+    await execPromise(
+      'mkdir -p ' + quoteForShell(DEPLOY_ROOT) +
+      ' && rm -rf ' + quoteForShell(deployPath) +
+      ' && mkdir -p ' + quoteForShell(deployPath)
+    );
+    await stageNexusProject(sourceDir, deployPath);
+  } else {
+    const cloneResult = await execPromise(cloneCmd);
+    cloneOut = cloneResult.stdout;
+    cloneErr = cloneResult.stderr;
+  }
   let output = [cloneOut, cloneErr].filter(Boolean).join('\n').trim();
 
   // Step 2: Write vault secrets to .env.local so they are available during build
