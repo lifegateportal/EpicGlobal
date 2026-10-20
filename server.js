@@ -243,7 +243,7 @@ function validateNexusArchivePath(rawPath) {
   if (
     !normalized
     || segments.some((segment) => !segment || segment === '.' || segment === '..')
-    || segments.some((segment) => /^\.env(?:$|\.(?!example$))/i.test(segment))
+    || segments.some((segment) => /^\.env(?:$|\.)/i.test(segment) && !/\.example$/i.test(segment))
   ) {
     throw new Error('Project archive contains an unsafe or secret file path.');
   }
