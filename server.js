@@ -69,15 +69,7 @@ const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      const allowed = [
-        'http://localhost:5173',
-        'https://epicglobal.app',
-        'https://www.epicglobal.app',
-        'https://api.epicglobal.app'
-      ];
-      const isGithubPreview = /https:\/\/.*\.app\.github\.dev$/.test(origin);
-      const isCloudflarePreview = /https:\/\/.*\.pages\.dev$/.test(origin);
-      const isAllowed = allowed.includes(origin) || isGithubPreview || isCloudflarePreview;
+      const isAllowed = isAllowedClientOrigin(origin);
       callback(isAllowed ? null : new Error('Origin not allowed by CORS'), isAllowed);
     },
     methods: ['GET', 'POST'],
@@ -91,15 +83,7 @@ const io = new Server(server, {
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    const allowed = [
-      'http://localhost:5173',
-      'https://epicglobal.app',
-      'https://www.epicglobal.app',
-      'https://api.epicglobal.app'
-    ];
-    const isGithubPreview = /https:\/\/.*\.app\.github\.dev$/.test(origin);
-    const isCloudflarePreview = /https:\/\/.*\.pages\.dev$/.test(origin);
-    const isAllowed = allowed.includes(origin) || isGithubPreview || isCloudflarePreview;
+    const isAllowed = isAllowedClientOrigin(origin);
     callback(isAllowed ? null : new Error('Origin not allowed by CORS'), isAllowed);
   },
   credentials: true
@@ -146,7 +130,8 @@ function isAllowedClientOrigin(origin) {
   ];
   return allowed.includes(origin) ||
     /^https:\/\/.*\.app\.github\.dev$/.test(origin) ||
-    /^https:\/\/.*\.pages\.dev$/.test(origin);
+    /^https:\/\/.*\.pages\.dev$/.test(origin) ||
+    /^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(origin);
 }
 
 // Protect every platform API; shared routes enforce their narrower site session.

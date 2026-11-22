@@ -3,8 +3,8 @@ const configuredSocketUrl = import.meta.env.VITE_SOCKET_URL?.trim();
 function resolveDefaultBaseUrl(): string {
   const host = window.location.hostname.toLowerCase();
   const isEpicGlobalHost = host === 'epicglobal.app' || host === 'www.epicglobal.app';
-  const isCloudflarePreview = host.endsWith('.pages.dev');
-  if (isEpicGlobalHost || isCloudflarePreview) {
+  const isCloudflareHost = host.endsWith('.pages.dev') || host.endsWith('.workers.dev');
+  if (isEpicGlobalHost || isCloudflareHost) {
     return 'https://api.epicglobal.app';
   }
   return window.location.origin;
