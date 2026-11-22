@@ -18,13 +18,12 @@ export const API: string = BASE_URL.replace(/\/$/, '');
 
 const LS_KEY = 'eg_orchestrator_api_key';
 
-/** API key sent with every orchestrator request.
- *  Priority: localStorage (user-entered) → VITE_ORCHESTRATOR_API_KEY (build-time) */
+/** API key entered by the platform owner and stored in this browser only. */
 export function getOrchestratorApiKey(): string {
   try {
-    return localStorage.getItem(LS_KEY)?.trim() || import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '';
+    return localStorage.getItem(LS_KEY)?.trim() || '';
   } catch {
-    return import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '';
+    return '';
   }
 }
 
@@ -32,11 +31,12 @@ export function setOrchestratorApiKey(key: string): void {
   try {
     if (key.trim()) localStorage.setItem(LS_KEY, key.trim());
     else localStorage.removeItem(LS_KEY);
+    window.dispatchEvent(new Event('eg-api-key-updated'));
   } catch { /* ignore */ }
 }
 
-/** @deprecated use getOrchestratorApiKey() for live value */
-export const ORCHESTRATOR_API_KEY: string = import.meta.env.VITE_ORCHESTRATOR_API_KEY?.trim() || '';
+/** @deprecated use getOrchestratorApiKey() for the browser-entered value */
+export const ORCHESTRATOR_API_KEY = '';
 
 /** Returns headers including the API key for orchestrator fetch calls. */
 export function apiHeaders(extra?: Record<string, string>): Record<string, string> {
@@ -49,13 +49,12 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
 }
 
 /**
- * Drop-in replacement for `fetch` that automatically injects the API key
- * header on any request whose URL contains `/api/orchestrator`.
+ * Drop-in replacement for `fetch` that injects the platform key on protected APIs.
  */
 export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const key = getOrchestratorApiKey();
-  const isOrchestrator = input.includes('/api/orchestrator');
-  if (!isOrchestrator || !key) return fetch(input, init);
+  const isProtectedApi = input.includes('/api/') && !input.includes('/api/shared/');
+  if (!isProtectedApi || !key) return fetch(input, init);
   const existingHeaders = init?.headers
     ? (init.headers instanceof Headers
         ? Object.fromEntries((init.headers as Headers).entries())

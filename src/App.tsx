@@ -12,6 +12,7 @@ import { KeyboardHUD } from './components/KeyboardHUD';
 import DeploymentDashboard from './components/DeploymentDashboard';
 import BackendManager from './components/BackendManager';
 import { DomainsTab } from './components/DomainsTab';
+import SharedSitePortal from './components/SharedSitePortal';
 import { useTelemetry } from './hooks/useTelemetry';
 
 const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
@@ -124,6 +125,9 @@ export default function App() {
     handleTabSwitch(tab);
     setSidebarOpen(false);
   };
+
+  const sharedRoute = window.location.pathname.match(/^\/shared\/([A-Za-z0-9_-]+)\/?$/);
+  if (sharedRoute) return <SharedSitePortal shareId={sharedRoute[1]} />;
 
   if (!isAuthenticated) {
     const handleAuth = (e: React.FormEvent) => {

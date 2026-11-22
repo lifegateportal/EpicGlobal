@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Zap, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { API } from '../api/client';
+import { API, apiFetch } from '../api/client';
 
 export default function DeploymentDashboard() {
   const [formData, setFormData] = useState({
@@ -27,7 +27,7 @@ export default function DeploymentDashboard() {
     try {
       const endpoint = `${API}/api/deploy`;
 
-      const response = await fetch(endpoint, {
+      const response = await apiFetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

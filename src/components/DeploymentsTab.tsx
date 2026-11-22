@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight, Upload } from 'lucide-react';
+import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight, Upload, Link2, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { API, apiFetch } from '../api/client';
@@ -10,6 +10,7 @@ import type { HistoryEntry, Project } from '../types';
 type PendingRow = { id: string; key: string; value: string; showValue: boolean };
 type FileEntry = { name: string; isDir: boolean; size: number; mtime: string };
 type FileMgrState = { currentPath: string; entries: FileEntry[]; loading: boolean; editing: string | null; editContent: string; editSaving: boolean; uploading: boolean };
+type ClientShare = { id: string; createdAt: string; expiresAt: string };
 
 type ProjectVault = {
   storedKeys: Record<string, string>; // key → masked value from server
@@ -139,6 +140,10 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
   const [fileMgr, setFileMgr] = useState<Record<string, FileMgrState>>({});
   const [newItemModal, setNewItemModal] = useState<{ project: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = useState('');
+  const [clientShares, setClientShares] = useState<Record<string, ClientShare[]>>({});
+  const [sharePasswords, setSharePasswords] = useState<Record<string, string>>({});
+  const [shareLinks, setShareLinks] = useState<Record<string, string>>({});
+  const [shareActionLoading, setShareActionLoading] = useState<string | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -309,10 +314,62 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
     } catch { toast.error('Could not reach API.'); patchFileMgr(name, { loading: false }); }
   };
 
+  const loadClientShares = async (projectName: string) => {
+    try {
+      const res = await apiFetch(`${API}/api/orchestrator/shares?projectName=${encodeURIComponent(projectName)}`);
+      const data = await res.json();
+      if (data.success) setClientShares(prev => ({ ...prev, [projectName]: data.shares || [] }));
+      else toast.error(data.error || 'Could not load client links.');
+    } catch { toast.error('Could not reach API.'); }
+  };
+
+  const createClientShare = async (projectName: string) => {
+    const password = sharePasswords[projectName] || '';
+    if (password.trim().length < 10) {
+      toast.error('Use a password of at least 10 characters.');
+      return;
+    }
+    setShareActionLoading(projectName);
+    try {
+      const res = await apiFetch(`${API}/api/orchestrator/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName, password }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error(data.error || 'Could not create client access.');
+        return;
+      }
+      const link = `${window.location.origin}/shared/${data.share.id}`;
+      setShareLinks(prev => ({ ...prev, [projectName]: link }));
+      setSharePasswords(prev => ({ ...prev, [projectName]: '' }));
+      toast.success('Client access link created. Share the password separately.');
+      await loadClientShares(projectName);
+    } catch { toast.error('Could not reach API.'); }
+    finally { setShareActionLoading(null); }
+  };
+
+  const revokeClientShare = async (projectName: string, shareId: string) => {
+    if (!confirm('Revoke this client access link?')) return;
+    setShareActionLoading(shareId);
+    try {
+      const res = await apiFetch(`${API}/api/orchestrator/shares/${encodeURIComponent(shareId)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        setShareLinks(prev => ({ ...prev, [projectName]: '' }));
+        toast.success('Client access revoked.');
+        await loadClientShares(projectName);
+      } else toast.error(data.error || 'Could not revoke client access.');
+    } catch { toast.error('Could not reach API.'); }
+    finally { setShareActionLoading(null); }
+  };
+
   const toggleFiles = (name: string) => {
     if (expandedFiles === name) { setExpandedFiles(null); return; }
     setExpandedFiles(name);
     browseFiles(name, '');
+    loadClientShares(name);
   };
 
   const createItem = async () => {
@@ -695,6 +752,58 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
                         transition={{ duration: 0.18 }}
                         className="overflow-hidden border-t border-zinc-800/60"
                       >
+                        <div className="px-5 py-4 border-b border-zinc-800/60 bg-zinc-900/10 space-y-3">
+                          <div>
+                            <p className="text-sm font-medium text-zinc-200 flex items-center gap-2"><Link2 size={14} /> Client access</p>
+                            <p className="text-xs text-zinc-600 mt-1">Create a password-protected link limited to this website. Links expire after 30 days; send the password separately.</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <input
+                              type="password"
+                              autoComplete="new-password"
+                              value={sharePasswords[name] || ''}
+                              onChange={event => setSharePasswords(prev => ({ ...prev, [name]: event.target.value }))}
+                              placeholder="Client password (10+ characters)"
+                              className="min-w-56 flex-1 bg-black border border-zinc-800 rounded-md py-2 px-3 text-xs text-zinc-300 focus:outline-none focus:border-zinc-600"
+                            />
+                            <button
+                              onClick={() => void createClientShare(name)}
+                              disabled={shareActionLoading === name || (sharePasswords[name] || '').trim().length < 10}
+                              className="text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-100 px-3 py-2 rounded transition-colors disabled:opacity-40"
+                            >{shareActionLoading === name ? 'Creating…' : 'Create access link'}</button>
+                          </div>
+                          {shareLinks[name] && (
+                            <div className="flex flex-wrap items-center gap-2 rounded-md border border-green-900/40 bg-green-950/10 p-2">
+                              <a href={shareLinks[name]} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate text-xs text-green-300 hover:underline">{shareLinks[name]}</a>
+                              <button
+                                onClick={() => navigator.clipboard.writeText(shareLinks[name]).then(() => toast.success('Link copied.')).catch(() => toast.error('Could not copy link.'))}
+                                title="Copy client link"
+                                className="p-1.5 text-zinc-400 hover:text-white"
+                              ><Copy size={13} /></button>
+                            </div>
+                          )}
+                          {(clientShares[name] || []).map(share => {
+                            const link = `${window.location.origin}/shared/${share.id}`;
+                            return (
+                              <div key={share.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <div className="min-w-0 flex-1">
+                                  <a href={link} target="_blank" rel="noopener noreferrer" className="block truncate text-zinc-400 hover:text-zinc-200">{link}</a>
+                                  <span className="text-zinc-600">Active until {new Date(share.expiresAt).toLocaleDateString()}</span>
+                                </div>
+                                <button
+                                  onClick={() => navigator.clipboard.writeText(link).then(() => toast.success('Link copied.')).catch(() => toast.error('Could not copy link.'))}
+                                  title="Copy client link"
+                                  className="p-1.5 text-zinc-400 hover:text-white"
+                                ><Copy size={13} /></button>
+                                <button
+                                  onClick={() => void revokeClientShare(name, share.id)}
+                                  disabled={shareActionLoading === share.id}
+                                  className="text-red-400 hover:text-red-300 disabled:opacity-40"
+                                >{shareActionLoading === share.id ? 'Revoking…' : 'Revoke'}</button>
+                              </div>
+                            );
+                          })}
+                        </div>
                         {mgr.editing ? (
                           /* ── Inline editor with line numbers ── */
                           <div className="p-4 space-y-3">

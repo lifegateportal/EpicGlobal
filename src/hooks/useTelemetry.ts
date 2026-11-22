@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
-import { BASE_URL, API, apiFetch } from '../api/client';
+import { BASE_URL, API, apiFetch, getOrchestratorApiKey } from '../api/client';
 import type { TelemetryPoint } from '../types';
 
 function clampPercent(value: unknown): number {
@@ -28,6 +28,7 @@ type TelemetryState = {
 };
 
 export function useTelemetry(enabled: boolean): TelemetryState {
+  const [apiKey, setApiKey] = useState(getOrchestratorApiKey);
   const [serverConnected, setServerConnected] = useState(false);
   const [connectionStatusLabel, setConnectionStatusLabel] = useState('Disconnected');
   const [connectionStatusDetail, setConnectionStatusDetail] = useState(
@@ -45,6 +46,12 @@ export function useTelemetry(enabled: boolean): TelemetryState {
     });
   }, []);
 
+  useEffect(() => {
+    const handleApiKeyUpdated = () => setApiKey(getOrchestratorApiKey());
+    window.addEventListener('eg-api-key-updated', handleApiKeyUpdated);
+    return () => window.removeEventListener('eg-api-key-updated', handleApiKeyUpdated);
+  }, []);
+
   // WebSocket connection for live telemetry
   useEffect(() => {
     if (!enabled) return;
@@ -57,6 +64,7 @@ export function useTelemetry(enabled: boolean): TelemetryState {
       transports: ['polling', 'websocket'],
       upgrade: true,
       path: '/socket.io',
+      auth: { apiKey },
       timeout: 10000,
       autoConnect: false,
     });
@@ -103,7 +111,7 @@ export function useTelemetry(enabled: boolean): TelemetryState {
     return () => {
       socket.disconnect();
     };
-  }, [enabled, appendPoint]);
+  }, [enabled, appendPoint, apiKey]);
 
   // REST polling fallback for environments where WS events are intermittent
   useEffect(() => {
