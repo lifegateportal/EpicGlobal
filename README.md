@@ -51,6 +51,8 @@ Each link is limited to one static site. Clients can browse, upload, create, edi
 
 The platform API key is required for all platform APIs and the telemetry socket. It is entered in the owner's Settings page and stored in that browser; do not configure it as a frontend build-time variable.
 
+Cloudflare Workers static-asset uploads use `wrangler.jsonc`, which points Wrangler at the Vite `dist/` output. If the deployed Worker has a different name, update the `name` field to match it.
+
 You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
 ```js
