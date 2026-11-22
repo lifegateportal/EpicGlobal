@@ -7,11 +7,11 @@ function resolveDefaultBaseUrl(): string {
   if (isEpicGlobalHost || isCloudflareHost) {
     return 'https://api.epicglobal.app';
   }
-  return window.location.origin;
+  return configuredSocketUrl || window.location.origin;
 }
 
 /** Base WebSocket / HTTP origin shared across all API calls. */
-export const BASE_URL: string = configuredSocketUrl || resolveDefaultBaseUrl();
+export const BASE_URL: string = resolveDefaultBaseUrl();
 
 /** Trailing-slash-stripped BASE_URL for direct path concatenation. */
 export const API: string = BASE_URL.replace(/\/$/, '');
