@@ -55,8 +55,14 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
   const [imageAttachment, setImageAttachment] = useState<{ file: File; dataUrl: string } | null>(null);
   const [fileHistory, setFileHistory] = useState<FileHistoryEntry[]>([]);
   const [undoingId, setUndoingId] = useState<string | null>(null);
+  const [mobilePanel, setMobilePanel] = useState<'files' | 'chat'>('chat');
   const fileInput = useRef<HTMLInputElement>(null);
   const chatImageInput = useRef<HTMLInputElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [messages, chatLoading]);
 
   const request = useCallback(async (endpoint: string, init?: RequestInit): Promise<SharedResponse> => {
     const response = await fetch(`${API}/api/shared/${encodeURIComponent(shareId)}${endpoint}`, {
@@ -359,20 +365,26 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
   const breadcrumbs = currentPath ? currentPath.split('/') : [];
 
   return (
-    <div className="min-h-screen bg-black text-zinc-300 font-sans">
-      <header className="border-b border-zinc-800 bg-[#0A0A0A] px-4 py-3 sm:px-6 flex items-center justify-between gap-4">
+    <div className="fixed inset-0 flex h-[100dvh] flex-col overflow-hidden bg-black text-zinc-300 font-sans">
+      <header className="shrink-0 border-b border-zinc-800 bg-[#0A0A0A] px-3 py-3 sm:px-6 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-widest text-zinc-600">Website workspace</p>
           <h1 className="text-base font-semibold text-white truncate">{projectName}</h1>
           {domain && <p className="text-xs text-zinc-500 truncate">{domain}</p>}
         </div>
+        <div className="flex items-center gap-2">
+          <div className="grid grid-cols-2 gap-1 lg:hidden">
+            <button onClick={() => setMobilePanel('files')} className={`rounded-md px-2.5 py-2 text-xs font-medium ${mobilePanel === 'files' ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-zinc-400'}`}>Files</button>
+            <button onClick={() => setMobilePanel('chat')} className={`rounded-md px-2.5 py-2 text-xs font-medium ${mobilePanel === 'chat' ? 'bg-zinc-700 text-white' : 'bg-zinc-900 text-zinc-400'}`}>Chat</button>
+          </div>
         <button onClick={() => void logout()} className="flex items-center gap-2 rounded-md border border-zinc-800 px-3 py-2 text-xs text-zinc-400 hover:text-white">
           <LogOut size={14} /> Log out
         </button>
+        </div>
       </header>
 
-      <main className="grid min-h-[calc(100vh-74px)] grid-cols-1 gap-4 p-4 lg:grid-cols-2 lg:p-6">
-        <section className="min-w-0 rounded-xl border border-zinc-800 bg-[#0A0A0A] overflow-hidden flex flex-col">
+      <main className="grid flex-1 min-h-0 grid-cols-1 gap-3 p-3 lg:grid-cols-2 lg:gap-4 lg:p-6">
+        <section className={`${mobilePanel === 'files' ? 'flex' : 'hidden'} min-w-0 min-h-0 rounded-xl border border-zinc-800 bg-[#0A0A0A] overflow-hidden flex-col lg:flex`}>
           <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
             <div className="flex items-center gap-2"><Folder size={15} /><h2 className="text-sm font-semibold text-white">Website files</h2></div>
             <button onClick={() => void browse(currentPath)} title="Refresh files" className="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-white"><RefreshCw size={14} /></button>
@@ -404,7 +416,7 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
             </form>
           )}
           {error && <p className="border-b border-red-900/50 bg-red-950/20 px-4 py-2 text-xs text-red-300">{error}</p>}
-          <div className="divide-y divide-zinc-800/60 overflow-y-auto">
+          <div className="flex-1 min-h-0 divide-y divide-zinc-800/60 overflow-y-auto">
             {entries.length === 0 ? (
               <p className="p-6 text-center text-sm text-zinc-600">This folder is empty.</p>
             ) : entries.map(entry => {
@@ -422,7 +434,7 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
             })}
           </div>
           {fileHistory.length > 0 && (
-            <div className="border-t border-zinc-800 p-3 space-y-2">
+            <div className="max-h-32 shrink-0 space-y-2 overflow-y-auto border-t border-zinc-800 p-3">
               <p className="text-xs font-medium text-zinc-400 flex items-center gap-1.5"><Undo2 size={13} /> Saved versions</p>
               {fileHistory.slice(0, 10).map(entry => (
                 <div key={entry.id} className="flex items-center justify-between gap-2 text-xs">
@@ -442,24 +454,24 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
             </div>
           )}
           {selectedFile && (
-            <div className="border-t border-zinc-800 p-3 flex flex-1 flex-col gap-2 min-h-80">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 border-t border-zinc-800 p-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="truncate font-mono text-xs text-zinc-400">{selectedFile}</span>
                 <button onClick={() => void saveFile()} disabled={saving} className="flex items-center gap-1.5 rounded bg-zinc-700 px-3 py-1.5 text-xs text-white hover:bg-zinc-600 disabled:opacity-50">
                   {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />} Save
                 </button>
               </div>
-              <textarea value={fileContent} onChange={event => setFileContent(event.target.value)} spellCheck={false} className="min-h-72 flex-1 resize-y rounded border border-zinc-800 bg-black p-3 font-mono text-xs leading-5 text-zinc-200 outline-none focus:border-zinc-600" />
+              <textarea value={fileContent} onChange={event => setFileContent(event.target.value)} spellCheck={false} className="min-h-0 flex-1 resize-none rounded border border-zinc-800 bg-black p-3 font-mono text-xs leading-5 text-zinc-200 outline-none focus:border-zinc-600" />
             </div>
           )}
         </section>
 
-        <section className="min-w-0 rounded-xl border border-zinc-800 bg-[#0A0A0A] overflow-hidden flex flex-col min-h-[32rem]">
+        <section className={`${mobilePanel === 'chat' ? 'flex' : 'hidden'} min-w-0 min-h-0 rounded-xl border border-zinc-800 bg-[#0A0A0A] overflow-hidden flex-col lg:flex`}>
           <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
             <Bot size={16} className="text-sky-400" /><h2 className="text-sm font-semibold text-white">DeepSeek site assistant</h2>
           </div>
           <p className="border-b border-zinc-800/70 px-4 py-2.5 text-xs text-zinc-500">The assistant uses small targeted edits, can inspect attached images, and stages changes for your approval. Each applied edit is saved as a version you can undo.</p>
-          <div className="flex-1 space-y-3 overflow-y-auto p-4">
+          <div ref={chatScrollRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto p-4">
             {messages.length === 0 && (
               <div className="rounded-lg border border-zinc-800 bg-black/50 p-4 text-sm text-zinc-500">
                 <MessageSquare size={15} className="mb-2 text-zinc-600" />
@@ -473,6 +485,7 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
             ))}
             {chatLoading && <p className="text-xs text-zinc-600 animate-pulse">Assistant is working with the website files…</p>}
           </div>
+          {error && <p role="alert" className="shrink-0 border-t border-red-900/50 bg-red-950/20 px-4 py-2 text-xs text-red-300">{error}</p>}
           {pendingChangeId && pendingChanges.length > 0 && (
             <div className="border-t border-amber-900/40 bg-amber-950/10 p-3 space-y-3">
               <div>
@@ -512,13 +525,13 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
               <button type="button" onClick={() => setImageAttachment(null)} title="Remove attached image" className="rounded p-1 text-zinc-500 hover:text-white"><X size={14} /></button>
             </div>
           )}
-          <form onSubmit={event => { event.preventDefault(); void sendMessage(); }} className="flex items-end gap-2 border-t border-zinc-800 p-3">
+          <form onSubmit={event => { event.preventDefault(); void sendMessage(); }} className="flex shrink-0 items-end gap-2 border-t border-zinc-800 p-3">
             <input ref={chatImageInput} type="file" accept="image/jpeg,image/png,image/gif,image/webp" className="hidden" onChange={event => { selectImage(event.target.files?.[0]); event.target.value = ''; }} />
             <button type="button" onClick={() => chatImageInput.current?.click()} title="Attach an image" className="rounded-md border border-zinc-800 p-2.5 text-zinc-500 hover:bg-zinc-800 hover:text-white"><Paperclip size={15} /></button>
-            <textarea value={chatInput} onChange={event => setChatInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={3} placeholder="Request a small, specific change…" className="min-w-0 flex-1 resize-y rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-600" />
+            <textarea value={chatInput} onChange={event => setChatInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={2} placeholder="Request a small, specific change…" className="min-w-0 flex-1 resize-none rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-600" />
             <button type="submit" disabled={chatLoading || (!chatInput.trim() && !imageAttachment)} className="rounded-md bg-white p-2.5 text-black hover:bg-zinc-200 disabled:opacity-40" title="Send message"><Send size={15} /></button>
           </form>
-          <div className="px-4 pb-3 text-[11px] text-zinc-700 flex items-center gap-1"><Check size={11} /> Changes are scoped to this site, backed up, and undoable.</div>
+          <div className="flex shrink-0 items-center gap-1 px-4 pb-3 text-[11px] text-zinc-700"><Check size={11} /> Changes are scoped to this site, backed up, and undoable.</div>
         </section>
       </main>
     </div>

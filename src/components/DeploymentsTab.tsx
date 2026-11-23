@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight, Upload, Link2, Copy } from 'lucide-react';
+import { Bot, CheckCircle2, Trash2, KeyRound, RefreshCw, Search, ChevronDown, ChevronUp, ExternalLink, Plus, Eye, EyeOff, Lock, X, Pencil, Folder, FolderPlus, FilePlus, FileText, ArrowLeft, ChevronRight, Upload, Link2, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { API, apiFetch } from '../api/client';
+import { HostSiteAssistant } from './HostSiteAssistant';
 import type { HistoryEntry, Project } from '../types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -144,6 +145,7 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
   const [sharePasswords, setSharePasswords] = useState<Record<string, string>>({});
   const [shareLinks, setShareLinks] = useState<Record<string, string>>({});
   const [shareActionLoading, setShareActionLoading] = useState<string | null>(null);
+  const [hostAssistantOpen, setHostAssistantOpen] = useState(false);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -466,6 +468,7 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
     ...Object.keys(projects),
     ...history.map(e => e.projectName),
   ])).filter(n => Boolean(n) && n !== 'undefined');
+  const staticProjectNames = liveProjectNames.filter(name => projects[name]?.deployType === 'static');
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -710,18 +713,29 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
 
       )}
 
-      {subTab === 'files' && liveProjectNames.some(n => projects[n]?.deployType === 'static') && (
+      {subTab === 'files' && (
         <div className="border border-zinc-800/60 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col min-h-0">
-          <div className="p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between shrink-0">
+          {hostAssistantOpen && <HostSiteAssistant projectNames={staticProjectNames} onClose={() => setHostAssistantOpen(false)} />}
+          <div className="p-4 sm:p-5 border-b border-zinc-800/60 bg-zinc-900/20 flex items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-2">
               <Folder size={16} className="text-zinc-400" />
               <h2 className="text-sm font-semibold text-zinc-100">Static File Manager</h2>
             </div>
-            <span className="text-xs text-zinc-600">Create, edit &amp; delete files · static sites only</span>
+            <div className="flex items-center gap-3">
+              <span className="hidden text-xs text-zinc-600 sm:inline">Create, edit &amp; delete files · static sites only</span>
+              <button
+                onClick={() => setHostAssistantOpen(true)}
+                className="flex shrink-0 items-center gap-1.5 rounded-md border border-sky-900/60 bg-sky-950/30 px-2.5 py-2 text-xs font-medium text-sky-200 hover:bg-sky-900/40"
+              ><Bot size={14} /> Host assistant</button>
+            </div>
           </div>
 
-          <div className="divide-y divide-zinc-800/60">
-            {liveProjectNames.filter(n => projects[n]?.deployType === 'static').map(name => {
+          {staticProjectNames.length === 0 ? (
+            <div className="p-6 text-center text-sm text-zinc-500">
+              No static websites yet. Open the host assistant to create and deploy one.
+            </div>
+          ) : <div className="divide-y divide-zinc-800/60">
+            {staticProjectNames.map(name => {
               const mgr     = getFileMgr(name);
               const project = projects[name];
               const isOpen  = expandedFiles === name;
@@ -974,7 +988,7 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
       )}
     </div>
