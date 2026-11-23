@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, ChevronRight, FileText, Folder, LogOut, MessageSquare, RefreshCw, Save, Send, Trash2, Upload } from 'lucide-react';
+import { Bot, Check, ChevronRight, FileText, Folder, LogOut, MessageSquare, RefreshCw, Save, Send, Trash2, Upload, Paperclip, Undo2, X } from 'lucide-react';
 import { API } from '../api/client';
 
 type FileEntry = { name: string; isDir: boolean; size: number; mtime: string };
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
+type ProposedEdit = { oldText: string; newText: string };
+type ProposedChange = {
+  path: string;
+  kind: 'text' | 'image';
+  beforeContent: string | null;
+  afterContent: string | null;
+  edits: ProposedEdit[];
+  mimeType: string | null;
+  imageDataUrl: string | null;
+};
+type FileHistoryEntry = { id: string; createdAt: string; files: string[]; undoneAt: string | null };
 type SharedResponse = {
   success: boolean;
   error?: string;
@@ -14,8 +25,11 @@ type SharedResponse = {
   answer?: string;
   pendingChangeId?: string | null;
   proposedFiles?: string[];
-  changes?: Array<{ path: string; content: string }>;
+  changes?: ProposedChange[];
   changedFiles?: string[];
+  history?: FileHistoryEntry[];
+  historyId?: string;
+  restoredFiles?: string[];
   count?: number;
 };
 
@@ -37,8 +51,12 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [pendingChangeId, setPendingChangeId] = useState<string | null>(null);
-  const [pendingChanges, setPendingChanges] = useState<Array<{ path: string; content: string }>>([]);
+  const [pendingChanges, setPendingChanges] = useState<ProposedChange[]>([]);
+  const [imageAttachment, setImageAttachment] = useState<{ file: File; dataUrl: string } | null>(null);
+  const [fileHistory, setFileHistory] = useState<FileHistoryEntry[]>([]);
+  const [undoingId, setUndoingId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const chatImageInput = useRef<HTMLInputElement>(null);
 
   const request = useCallback(async (endpoint: string, init?: RequestInit): Promise<SharedResponse> => {
     const response = await fetch(`${API}/api/shared/${encodeURIComponent(shareId)}${endpoint}`, {
@@ -73,15 +91,25 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
     }
   }, [request]);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      const data = await request('/history');
+      setFileHistory(data.history || []);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load undo history.');
+    }
+  }, [request]);
+
   useEffect(() => {
     let active = true;
     request('/session')
       .then(async data => {
-        const files = await request('/files');
+        const [files, history] = await Promise.all([request('/files'), request('/history')]);
         if (!active) return;
         setProjectName(data.projectName || '');
         setDomain(data.domain || null);
         setEntries(files.entries || []);
+        setFileHistory(history.history || []);
         setAuthenticated(true);
       })
       .catch(requestError => {
@@ -103,6 +131,7 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
       setAuthenticated(true);
       setPassword('');
       void browse('');
+      void loadHistory();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not log in.');
     }
@@ -118,6 +147,8 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
       setEntries([]);
       setMessages([]);
       setSelectedFile(null);
+      setFileHistory([]);
+      setImageAttachment(null);
     }
   };
 
@@ -139,6 +170,7 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
     try {
       await request('/file', { method: 'PUT', body: JSON.stringify({ relPath: selectedFile, content: fileContent }) });
       setError('');
+      await loadHistory();
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save this file.');
       if ((requestError as Error & { status?: number }).status === 401) setAuthenticated(false);
@@ -192,22 +224,54 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
     }
   };
 
+  const selectImage = (file: File | undefined) => {
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) {
+      setError('Attach a JPEG, PNG, GIF, or WebP image smaller than 4 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setImageAttachment({ file, dataUrl: reader.result });
+        setError('');
+      } else setError('Could not read the attached image.');
+    };
+    reader.onerror = () => setError('Could not read the attached image.');
+    reader.readAsDataURL(file);
+  };
+
   const sendMessage = async () => {
     const message = chatInput.trim();
-    if (!message || chatLoading) return;
+    if ((!message && !imageAttachment) || chatLoading) return;
     setChatInput('');
     setChatLoading(true);
     setError('');
-    setMessages(previous => [...previous, { role: 'user', content: message }]);
+    const prompt = message || 'Please inspect this image and suggest a suitable website placement.';
+    setMessages(previous => [...previous, {
+      role: 'user',
+      content: imageAttachment ? `${prompt}\n[Image attached: ${imageAttachment.file.name}]` : prompt
+    }]);
     try {
       const data = await request('/chat', {
         method: 'POST',
-        body: JSON.stringify({ message, history: messages.slice(-10) }),
+        body: JSON.stringify({
+          message: prompt,
+          history: messages.slice(-10),
+          ...(imageAttachment ? {
+            image: {
+              name: imageAttachment.file.name,
+              mimeType: imageAttachment.file.type,
+              data: imageAttachment.dataUrl.split(',')[1]
+            }
+          } : {})
+        }),
       });
       const proposed = data.proposedFiles?.length
         ? `\n\nProposed changes (not applied): ${data.proposedFiles.join(', ')}`
         : '';
       setMessages(previous => [...previous, { role: 'assistant', content: `${data.answer || ''}${proposed}` }]);
+      setImageAttachment(null);
       if (data.pendingChangeId) {
         const proposal = await request(`/changes/${encodeURIComponent(data.pendingChangeId)}`);
         setPendingChangeId(data.pendingChangeId);
@@ -242,9 +306,27 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
       setPendingChanges([]);
       await browse(currentPath);
       if (selectedFile && data.changedFiles?.includes(selectedFile)) await openFile(selectedFile);
+      await loadHistory();
       setError('');
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not apply proposed changes.');
+    }
+  };
+
+  const undoChange = async (entry: FileHistoryEntry) => {
+    if (!window.confirm(`Undo this change to ${entry.files.join(', ')}?`)) return;
+    setUndoingId(entry.id);
+    try {
+      const data = await request(`/history/${encodeURIComponent(entry.id)}/undo`, { method: 'POST' });
+      setMessages(previous => [...previous, { role: 'assistant', content: `Undid changes to: ${(data.restoredFiles || []).join(', ')}` }]);
+      await loadHistory();
+      await browse(currentPath);
+      if (selectedFile && data.restoredFiles?.includes(selectedFile)) await openFile(selectedFile);
+      setError('');
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not undo this change.');
+    } finally {
+      setUndoingId(null);
     }
   };
 
@@ -339,6 +421,26 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
               );
             })}
           </div>
+          {fileHistory.length > 0 && (
+            <div className="border-t border-zinc-800 p-3 space-y-2">
+              <p className="text-xs font-medium text-zinc-400 flex items-center gap-1.5"><Undo2 size={13} /> Saved versions</p>
+              {fileHistory.slice(0, 10).map(entry => (
+                <div key={entry.id} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate text-zinc-600">
+                    {new Date(entry.createdAt).toLocaleString()} · {entry.files.join(', ')}
+                    {entry.undoneAt ? ' · undone' : ''}
+                  </span>
+                  {!entry.undoneAt && (
+                    <button
+                      onClick={() => void undoChange(entry)}
+                      disabled={undoingId === entry.id}
+                      className="shrink-0 rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:text-white disabled:opacity-40"
+                    >{undoingId === entry.id ? 'Undoing…' : 'Undo'}</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {selectedFile && (
             <div className="border-t border-zinc-800 p-3 flex flex-1 flex-col gap-2 min-h-80">
               <div className="flex items-center justify-between gap-3">
@@ -356,7 +458,7 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
           <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
             <Bot size={16} className="text-sky-400" /><h2 className="text-sm font-semibold text-white">DeepSeek site assistant</h2>
           </div>
-          <p className="border-b border-zinc-800/70 px-4 py-2.5 text-xs text-zinc-500">The assistant can read this website’s text-based files only. Content it reads is sent to DeepSeek; proposed edits require your approval before they are saved.</p>
+          <p className="border-b border-zinc-800/70 px-4 py-2.5 text-xs text-zinc-500">The assistant uses small targeted edits, can inspect attached images, and stages changes for your approval. Each applied edit is saved as a version you can undo.</p>
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
             {messages.length === 0 && (
               <div className="rounded-lg border border-zinc-800 bg-black/50 p-4 text-sm text-zinc-500">
@@ -380,22 +482,43 @@ export default function SharedSitePortal({ shareId }: { shareId: string }) {
               <div className="max-h-64 space-y-2 overflow-y-auto">
                 {pendingChanges.map(change => (
                   <details key={change.path} className="rounded border border-zinc-800 bg-black">
-                    <summary className="cursor-pointer px-3 py-2 font-mono text-xs text-zinc-300">{change.path}</summary>
-                    <pre className="max-h-48 overflow-auto border-t border-zinc-800 p-3 text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap">{change.content}</pre>
+                    <summary className="cursor-pointer px-3 py-2 font-mono text-xs text-zinc-300">{change.kind === 'image' ? 'Image asset: ' : ''}{change.path}</summary>
+                    <div className="border-t border-zinc-800 p-3 space-y-3">
+                      {change.kind === 'image' && change.imageDataUrl ? (
+                        <img src={change.imageDataUrl} alt={`Proposed image ${change.path}`} className="max-h-48 max-w-full rounded object-contain" />
+                      ) : change.edits.length > 0 ? change.edits.map((edit, index) => (
+                        <div key={index} className="grid gap-2 sm:grid-cols-2">
+                          <pre className="max-h-36 overflow-auto rounded bg-red-950/20 p-2 text-[11px] leading-relaxed text-red-200 whitespace-pre-wrap"><span className="text-red-400">− </span>{edit.oldText}</pre>
+                          <pre className="max-h-36 overflow-auto rounded bg-green-950/20 p-2 text-[11px] leading-relaxed text-green-200 whitespace-pre-wrap"><span className="text-green-400">+ </span>{edit.newText}</pre>
+                        </div>
+                      )) : (
+                        <pre className="max-h-48 overflow-auto p-2 text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap">{change.afterContent}</pre>
+                      )}
+                    </div>
                   </details>
                 ))}
               </div>
+              <p className="text-[11px] text-zinc-600">The previous file contents are saved automatically and can be restored from Saved versions.</p>
               <div className="flex justify-end gap-2">
                 <button onClick={() => void discardChanges()} className="rounded border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:text-white">Discard</button>
                 <button onClick={() => void applyChanges()} className="rounded bg-amber-300 px-3 py-1.5 text-xs font-medium text-black hover:bg-amber-200">Apply changes</button>
               </div>
             </div>
           )}
+          {imageAttachment && (
+            <div className="flex items-center gap-3 border-t border-zinc-800 px-3 py-2">
+              <img src={imageAttachment.dataUrl} alt="Image attached for visual reference" className="h-12 w-12 rounded object-cover" />
+              <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">{imageAttachment.file.name}</span>
+              <button type="button" onClick={() => setImageAttachment(null)} title="Remove attached image" className="rounded p-1 text-zinc-500 hover:text-white"><X size={14} /></button>
+            </div>
+          )}
           <form onSubmit={event => { event.preventDefault(); void sendMessage(); }} className="flex items-end gap-2 border-t border-zinc-800 p-3">
-            <textarea value={chatInput} onChange={event => setChatInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={3} placeholder="Describe what you want to change…" className="min-w-0 flex-1 resize-y rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-600" />
-            <button type="submit" disabled={chatLoading || !chatInput.trim()} className="rounded-md bg-white p-2.5 text-black hover:bg-zinc-200 disabled:opacity-40" title="Send message"><Send size={15} /></button>
+            <input ref={chatImageInput} type="file" accept="image/jpeg,image/png,image/gif,image/webp" className="hidden" onChange={event => { selectImage(event.target.files?.[0]); event.target.value = ''; }} />
+            <button type="button" onClick={() => chatImageInput.current?.click()} title="Attach an image" className="rounded-md border border-zinc-800 p-2.5 text-zinc-500 hover:bg-zinc-800 hover:text-white"><Paperclip size={15} /></button>
+            <textarea value={chatInput} onChange={event => setChatInput(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} rows={3} placeholder="Request a small, specific change…" className="min-w-0 flex-1 resize-y rounded-md border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-200 outline-none focus:border-zinc-600" />
+            <button type="submit" disabled={chatLoading || (!chatInput.trim() && !imageAttachment)} className="rounded-md bg-white p-2.5 text-black hover:bg-zinc-200 disabled:opacity-40" title="Send message"><Send size={15} /></button>
           </form>
-          <div className="px-4 pb-3 text-[11px] text-zinc-700 flex items-center gap-1"><Check size={11} /> Changes are limited to this site’s files.</div>
+          <div className="px-4 pb-3 text-[11px] text-zinc-700 flex items-center gap-1"><Check size={11} /> Changes are scoped to this site, backed up, and undoable.</div>
         </section>
       </main>
     </div>
