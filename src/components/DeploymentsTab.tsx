@@ -145,7 +145,7 @@ export function DeploymentsTab({ subTab = 'history' }: DeploymentsTabProps) {
   const [sharePasswords, setSharePasswords] = useState<Record<string, string>>({});
   const [shareLinks, setShareLinks] = useState<Record<string, string>>({});
   const [shareActionLoading, setShareActionLoading] = useState<string | null>(null);
-  const [hostAssistantOpen, setHostAssistantOpen] = useState(false);
+  const [hostAssistantOpen, setHostAssistantOpen] = useState(true);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
