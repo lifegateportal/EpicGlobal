@@ -19,6 +19,7 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
   const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   const [loadingProjects, setLoadingProjects] = useState(true);
+  const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
   const [projectLogs, setProjectLogs] = useState<Record<string, string>>({});
@@ -44,12 +45,15 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
     try {
       const res = await apiFetch(API + '/api/orchestrator/status', { cache: 'no-store' });
       const data = await res.json();
-      if (data.success) {
-        const nextProjects = data.projects && typeof data.projects === 'object' ? data.projects : {};
-        setProjects(nextProjects);
+      if (!res.ok || !data.success) {
+        setProjectLoadError(data.error || `Could not load projects (HTTP ${res.status}).`);
+        return;
       }
-    } catch {
-      // Silently fail
+      const nextProjects = data.projects && typeof data.projects === 'object' ? data.projects : {};
+      setProjects(nextProjects);
+      setProjectLoadError(null);
+    } catch (error) {
+      setProjectLoadError(error instanceof Error ? error.message : 'Could not reach the API server.');
     } finally {
       setLoadingProjects(false);
     }
@@ -719,6 +723,11 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
 
         {loadingProjects ? (
           <div className="p-8 text-center text-zinc-600 text-sm">Loading projects...</div>
+        ) : projectLoadError ? (
+          <div className="p-8 text-center text-sm text-amber-400">
+            <p>Could not load projects: {projectLoadError}</p>
+            <p className="mt-2 text-xs text-zinc-500">Check the API key in Settings and use Verify &amp; Save.</p>
+          </div>
         ) : projectList.length === 0 ? (
           <div className="p-8 text-center text-zinc-600 text-sm">No projects deployed yet.</div>
         ) : (

@@ -22,16 +22,46 @@ export function SettingsTab() {
   const [showKey, setShowKey] = useState(false);
   const [keyInput, setKeyInput] = useState(() => getOrchestratorApiKey());
   const [saved, setSaved] = useState(false);
+  const [keyStatus, setKeyStatus] = useState('');
+  const [verifyingKey, setVerifyingKey] = useState(false);
   const apiUrl = API;
   const activeKey = getOrchestratorApiKey();
   const maskedKey = activeKey
     ? activeKey.slice(0, 6) + '••••••••••••••••••••••••••' + activeKey.slice(-4)
     : '';
 
-  const handleSave = () => {
-    setOrchestratorApiKey(keyInput);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = async () => {
+    const candidateKey = keyInput.trim();
+    if (!candidateKey) {
+      setKeyStatus('Enter the server API key first.');
+      return;
+    }
+
+    setVerifyingKey(true);
+    setSaved(false);
+    setKeyStatus('Checking the key against the API server…');
+    try {
+      const response = await fetch(`${apiUrl}/api/orchestrator/status`, {
+        headers: { 'x-api-key': candidateKey },
+        cache: 'no-store',
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setKeyStatus(response.status === 401
+          ? 'The server rejected this key. Copy the value after ORCHESTRATOR_API_KEY= from the API server’s .env file.'
+          : data.error || `API check failed (HTTP ${response.status}).`);
+        return;
+      }
+
+      setOrchestratorApiKey(candidateKey);
+      setKeyInput(candidateKey);
+      setSaved(true);
+      setKeyStatus(`Key verified. ${Object.keys(data.projects || {}).length} projects are available.`);
+    } catch (error) {
+      setKeyStatus(error instanceof Error ? `Could not reach the API server: ${error.message}` : 'Could not reach the API server.');
+    } finally {
+      setVerifyingKey(false);
+    }
   };
 
   return (
@@ -74,12 +104,14 @@ export function SettingsTab() {
               {keyInput && <CopyButton text={keyInput} />}
               <button
                 onClick={handleSave}
-                className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-semibold transition-colors"
+                disabled={verifyingKey}
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-semibold transition-colors disabled:opacity-50"
               >
-                {saved ? <Check size={12} className="text-green-300" /> : <Save size={12} />}
-                {saved ? 'Saved' : 'Save'}
+                {verifyingKey ? <Save size={12} /> : saved ? <Check size={12} className="text-green-300" /> : <Save size={12} />}
+                {verifyingKey ? 'Checking…' : saved ? 'Verified' : 'Verify & Save'}
               </button>
             </div>
+            {keyStatus && <p className={`text-xs ${saved ? 'text-green-400' : 'text-amber-400'}`}>{keyStatus}</p>}
             {!activeKey && (
               <p className="text-xs text-amber-500/80">Paste your server's <code className="bg-zinc-900 px-1 rounded">ORCHESTRATOR_API_KEY</code> above and click Save.</p>
             )}
