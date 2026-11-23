@@ -34,6 +34,7 @@ const DEPLOY_ROOT = '/var/www/epic-deployments';
 const REGISTRY_PATH = path.join(process.cwd(), 'projects.json');
 const HISTORY_PATH = path.join(process.cwd(), 'deploy-history.json');
 const VAULT_PATH = path.join(process.cwd(), 'secrets-vault.json');
+const SERVER_SECRETS_PATH = path.join(process.cwd(), 'server-secrets.json');
 const BACKUP_ROOT = path.join(process.cwd(), 'orchestrator-backups');
 const CLIENT_SHARES_PATH = path.join(process.cwd(), 'client-shares.json');
 const CADDYFILE_PATH = '/etc/caddy/Caddyfile';
@@ -709,6 +710,67 @@ function decryptSecret(enc) {
     decipher.final()
   ]);
   return decrypted.toString('utf8');
+}
+
+function getServerSecrets() {
+  if (!fs.existsSync(SERVER_SECRETS_PATH)) return {};
+  const data = JSON.parse(fs.readFileSync(SERVER_SECRETS_PATH, 'utf8'));
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Server secrets file has an invalid format.');
+  }
+  return data;
+}
+
+function saveServerSecrets(secrets) {
+  const tempPath = SERVER_SECRETS_PATH + '.tmp';
+  fs.writeFileSync(tempPath, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+  fs.renameSync(tempPath, SERVER_SECRETS_PATH);
+  fs.chmodSync(SERVER_SECRETS_PATH, 0o600);
+}
+
+function getServerSecretsEncryptionKey() {
+  const configuredKey = String(process.env.SERVER_SECRETS_KEY || '').trim();
+  if (configuredKey) return configuredKey;
+
+  const generatedKey = crypto.randomBytes(32).toString('hex');
+  const envPath = path.join(__dirname, '.env');
+  try {
+    fs.appendFileSync(envPath, `\nSERVER_SECRETS_KEY=${generatedKey}\n`, { mode: 0o600 });
+    fs.chmodSync(envPath, 0o600);
+    process.env.SERVER_SECRETS_KEY = generatedKey;
+    return generatedKey;
+  } catch (error) {
+    throw new Error('Could not persist the server secrets encryption key. Set SERVER_SECRETS_KEY in the backend .env file.');
+  }
+}
+
+function encryptServerSecret(value) {
+  const key = crypto.createHash('sha256').update(getServerSecretsEncryptionKey()).digest();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  return {
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    data: encrypted.toString('base64')
+  };
+}
+
+function decryptServerSecret(encrypted) {
+  const key = crypto.createHash('sha256').update(getServerSecretsEncryptionKey()).digest();
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(encrypted.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encrypted.data, 'base64')),
+    decipher.final()
+  ]).toString('utf8');
+}
+
+function getDeepSeekApiKey() {
+  const secrets = getServerSecrets();
+  return secrets.deepseekApiKey
+    ? decryptServerSecret(secrets.deepseekApiKey)
+    : String(process.env.DEEPSEEK_API_KEY || '').trim();
 }
 
 function maskSecret(value) {
@@ -2233,8 +2295,14 @@ app.post('/api/shared/:shareId/changes/:changeId/apply', requireClientShareSessi
 });
 
 app.post('/api/shared/:shareId/chat', requireClientShareSession, async (req, res) => {
-  const apiKey = String(process.env.DEEPSEEK_API_KEY || '').trim();
-  if (!apiKey) return res.status(503).json({ success: false, error: 'The site assistant is not configured. Add DEEPSEEK_API_KEY on the server.' });
+  let apiKey;
+  try {
+    apiKey = getDeepSeekApiKey();
+  } catch (error) {
+    console.error('[client-share] Could not load DeepSeek configuration:', error.message);
+    return res.status(500).json({ success: false, error: 'The site assistant configuration could not be loaded.' });
+  }
+  if (!apiKey) return res.status(503).json({ success: false, error: 'The site assistant is not configured. Add a DeepSeek API key in EpicGlobal Settings.' });
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   if (!message || message.length > 8000) {
     return res.status(400).json({ success: false, error: 'Enter a message up to 8,000 characters.' });
@@ -2478,6 +2546,52 @@ app.post('/api/orchestrator/rename', async (req, res) => {
 // ---------------------------------------------------------
 // API: Deployment History
 // ---------------------------------------------------------
+app.get('/api/orchestrator/settings/deepseek', (req, res) => {
+  try {
+    const savedKey = getDeepSeekApiKey();
+    res.json({
+      success: true,
+      configured: Boolean(savedKey),
+      maskedKey: savedKey ? maskSecret(savedKey) : null,
+      source: getServerSecrets().deepseekApiKey ? 'settings' : (savedKey ? 'environment' : null)
+    });
+  } catch (error) {
+    console.error('[settings] Could not read DeepSeek configuration:', error.message);
+    res.status(500).json({ success: false, error: 'Could not read DeepSeek configuration.' });
+  }
+});
+
+app.put('/api/orchestrator/settings/deepseek', (req, res) => {
+  const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+  if (!apiKey || apiKey.length > 4096 || /[\r\n\0]/.test(apiKey)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid DeepSeek API key.' });
+  }
+
+  try {
+    const secrets = getServerSecrets();
+    secrets.deepseekApiKey = encryptServerSecret(apiKey);
+    saveServerSecrets(secrets);
+    res.json({ success: true, configured: true, maskedKey: maskSecret(apiKey), source: 'settings' });
+  } catch (error) {
+    console.error('[settings] Could not save DeepSeek configuration:', error.message);
+    res.status(500).json({ success: false, error: 'Could not save DeepSeek configuration.' });
+  }
+});
+
+app.delete('/api/orchestrator/settings/deepseek', (req, res) => {
+  try {
+    const secrets = getServerSecrets();
+    delete secrets.deepseekApiKey;
+    if (Object.keys(secrets).length) saveServerSecrets(secrets);
+    else if (fs.existsSync(SERVER_SECRETS_PATH)) fs.unlinkSync(SERVER_SECRETS_PATH);
+    const envKey = String(process.env.DEEPSEEK_API_KEY || '').trim();
+    res.json({ success: true, configured: Boolean(envKey), source: envKey ? 'environment' : null });
+  } catch (error) {
+    console.error('[settings] Could not remove DeepSeek configuration:', error.message);
+    res.status(500).json({ success: false, error: 'Could not remove DeepSeek configuration.' });
+  }
+});
+
 app.get('/api/orchestrator/history', (req, res) => {
   res.json({ success: true, history: getHistory() });
 });

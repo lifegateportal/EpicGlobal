@@ -45,7 +45,7 @@ export default defineConfig([
 
 ## Client website access
 
-Set `DEEPSEEK_API_KEY` in the backend environment (never as a `VITE_` variable), then restart the server. In **Deployments → File Manager**, create a client access link for a static site and give the client the link and password separately. Links expire after 30 days and can be revoked from the same file manager.
+In **Settings → DeepSeek site assistant**, add the DeepSeek API key. EpicGlobal stores it encrypted on the API server; it is not exposed to the browser. The server generates and persists a separate `SERVER_SECRETS_KEY` in its private `.env` file when needed. A backend environment variable named `DEEPSEEK_API_KEY` can also be used as a fallback. In **Deployments → File Manager**, create a client access link for a static site and give the client the link and password separately. Links expire after 30 days and can be revoked from the same file manager.
 
 Each link is limited to one static site. Clients can browse, upload, create, edit, and delete that site's files. The DeepSeek assistant can read text-based files and propose code changes; clients review and apply proposed changes in the shared workspace. PDF and Office documents are not parsed by the assistant.
 

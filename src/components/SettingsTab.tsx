@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiTopology } from './ApiTopology';
 import { Copy, Eye, EyeOff, Check, Link2, Save } from 'lucide-react';
-import { API, getOrchestratorApiKey, setOrchestratorApiKey } from '../api/client';
+import { API, apiFetch, getOrchestratorApiKey, setOrchestratorApiKey } from '../api/client';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -24,11 +24,38 @@ export function SettingsTab() {
   const [saved, setSaved] = useState(false);
   const [keyStatus, setKeyStatus] = useState('');
   const [verifyingKey, setVerifyingKey] = useState(false);
+  const [deepSeekInput, setDeepSeekInput] = useState('');
+  const [deepSeekConfigured, setDeepSeekConfigured] = useState(false);
+  const [deepSeekMasked, setDeepSeekMasked] = useState('');
+  const [deepSeekSource, setDeepSeekSource] = useState<string | null>(null);
+  const [deepSeekStatus, setDeepSeekStatus] = useState('');
+  const [deepSeekBusy, setDeepSeekBusy] = useState(false);
+  const [showDeepSeekInput, setShowDeepSeekInput] = useState(false);
   const apiUrl = API;
   const activeKey = getOrchestratorApiKey();
   const maskedKey = activeKey
     ? activeKey.slice(0, 6) + '••••••••••••••••••••••••••' + activeKey.slice(-4)
     : '';
+
+  useEffect(() => {
+    let active = true;
+    apiFetch(`${API}/api/orchestrator/settings/deepseek`, { cache: 'no-store' })
+      .then(async response => {
+        const data = await response.json();
+        if (!active) return;
+        if (!response.ok || !data.success) {
+          setDeepSeekStatus(data.error || `Could not load DeepSeek settings (HTTP ${response.status}).`);
+          return;
+        }
+        setDeepSeekConfigured(Boolean(data.configured));
+        setDeepSeekMasked(data.maskedKey || '');
+        setDeepSeekSource(data.source || null);
+      })
+      .catch(error => {
+        if (active) setDeepSeekStatus(error instanceof Error ? error.message : 'Could not reach the API server.');
+      });
+    return () => { active = false; };
+  }, []);
 
   const handleSave = async () => {
     const candidateKey = keyInput.trim();
@@ -64,8 +91,110 @@ export function SettingsTab() {
     }
   };
 
+  const saveDeepSeekKey = async () => {
+    const candidateKey = deepSeekInput.trim();
+    if (!candidateKey) {
+      setDeepSeekStatus('Enter your DeepSeek API key.');
+      return;
+    }
+
+    setDeepSeekBusy(true);
+    setDeepSeekStatus('');
+    try {
+      const response = await apiFetch(`${API}/api/orchestrator/settings/deepseek`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: candidateKey }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setDeepSeekStatus(data.error || `Could not save the key (HTTP ${response.status}).`);
+        return;
+      }
+      setDeepSeekInput('');
+      setDeepSeekConfigured(true);
+      setDeepSeekMasked(data.maskedKey || '');
+      setDeepSeekSource('settings');
+      setDeepSeekStatus('DeepSeek key saved securely on the API server. No restart is required.');
+    } catch (error) {
+      setDeepSeekStatus(error instanceof Error ? error.message : 'Could not reach the API server.');
+    } finally {
+      setDeepSeekBusy(false);
+    }
+  };
+
+  const clearDeepSeekKey = async () => {
+    if (!window.confirm('Remove the DeepSeek key saved in EpicGlobal?')) return;
+    setDeepSeekBusy(true);
+    setDeepSeekStatus('');
+    try {
+      const response = await apiFetch(`${API}/api/orchestrator/settings/deepseek`, { method: 'DELETE' });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setDeepSeekStatus(data.error || `Could not remove the key (HTTP ${response.status}).`);
+        return;
+      }
+      setDeepSeekConfigured(Boolean(data.configured));
+      setDeepSeekMasked('');
+      setDeepSeekSource(data.source || null);
+      setDeepSeekStatus(data.configured
+        ? 'Saved key removed. A DEEPSEEK_API_KEY remains configured in the server environment.'
+        : 'DeepSeek key removed.');
+    } catch (error) {
+      setDeepSeekStatus(error instanceof Error ? error.message : 'Could not reach the API server.');
+    } finally {
+      setDeepSeekBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
+
+      <div className="border border-sky-900/50 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
+        <div className="p-5 border-b border-sky-900/40 bg-sky-950/20">
+          <h2 className="text-sm font-semibold text-zinc-100">DeepSeek site assistant</h2>
+          <p className="text-xs text-zinc-500 mt-1">The key is stored encrypted on your API server and is never sent to client browsers.</p>
+        </div>
+        <div className="p-5 space-y-3">
+          <label htmlFor="deepseek-api-key" className="block text-xs text-zinc-500 uppercase tracking-widest font-semibold">DeepSeek API key</label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id="deepseek-api-key"
+              type={showDeepSeekInput ? 'text' : 'password'}
+              autoComplete="new-password"
+              value={deepSeekInput}
+              onChange={event => setDeepSeekInput(event.target.value)}
+              placeholder={deepSeekConfigured ? 'Enter a new key to replace the saved key' : 'Paste your DeepSeek API key'}
+              className="min-w-60 flex-1 bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 font-mono focus:outline-none focus:border-zinc-600"
+            />
+            <button type="button" onClick={() => setShowDeepSeekInput(value => !value)} className="p-2 text-zinc-500 hover:text-zinc-200" aria-label={showDeepSeekInput ? 'Hide DeepSeek key' : 'Show DeepSeek key'}>
+              {showDeepSeekInput ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveDeepSeekKey()}
+              disabled={deepSeekBusy || !deepSeekInput.trim()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded bg-sky-700 hover:bg-sky-600 text-white text-xs font-semibold disabled:opacity-50"
+            >
+              <Save size={13} /> {deepSeekBusy ? 'Saving…' : 'Save key'}
+            </button>
+            {deepSeekConfigured && (
+              <button
+                type="button"
+                onClick={() => void clearDeepSeekKey()}
+                disabled={deepSeekBusy}
+                className="px-3 py-2 rounded border border-zinc-700 text-zinc-400 hover:text-red-300 text-xs disabled:opacity-50"
+              >Remove saved key</button>
+            )}
+          </div>
+          {deepSeekConfigured && (
+            <p className="text-xs text-green-400">
+              DeepSeek is configured{deepSeekMasked ? ` (${deepSeekMasked})` : ''}{deepSeekSource === 'environment' ? ' from the server environment' : ' in server settings'}.
+            </p>
+          )}
+          {deepSeekStatus && <p className={`text-xs ${deepSeekStatus.includes('saved securely') || deepSeekStatus === 'DeepSeek key removed.' ? 'text-green-400' : 'text-amber-400'}`}>{deepSeekStatus}</p>}
+        </div>
+      </div>
 
       {/* CONNECT EXTERNAL APP */}
       <div className="border border-indigo-900/50 bg-[#0A0A0A] rounded-xl overflow-hidden shadow-2xl">
