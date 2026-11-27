@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Trash2, RefreshCw, FileText, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Pencil, ExternalLink, Check, X } from 'lucide-react';
+import { Trash2, RefreshCw, FileText, CheckCircle2, XCircle, Clock, AlertCircle, KeyRound, Download, Upload, ShieldCheck, Bell, Pencil, ExternalLink, Check, X, Globe } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
 import { BASE_URL, API, apiFetch } from '../api/client';
@@ -30,6 +30,8 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
   const [backups, setBackups] = useState<BackupManifest[]>([]);
   const [renamingProject, setRenamingProject] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [editingDomain, setEditingDomain] = useState<string | null>(null);
+  const [domainValue, setDomainValue] = useState('');
   const [expandedFiles, setExpandedFiles] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<Record<string, string[]>>({});
   const [renamingFile, setRenamingFile] = useState<{ project: string; file: string } | null>(null);
@@ -415,6 +417,29 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
     }
   };
 
+  const handleUpdateDomain = async (projectName: string, nextDomain = domainValue) => {
+    setActionLoading('domain-' + projectName);
+    try {
+      const res = await apiFetch(`${API}/api/orchestrator/projects/${encodeURIComponent(projectName)}/domain`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: nextDomain.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        toast.error(data.error || 'Could not update project domain.');
+        return;
+      }
+      toast.success(data.domain ? `Connected ${data.domain} to ${projectName}.` : `Custom domain removed from ${projectName}.`);
+      setEditingDomain(null);
+      await fetchStatus();
+    } catch {
+      toast.error('Could not reach API to update the project domain.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   const handleFetchLogs = async (name: string) => {
     if (expandedLogs === name) { setExpandedLogs(null); return; }
     setExpandedLogs(name);
@@ -759,23 +784,33 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-600">
+                        <a
+                          href={'https://' + (project.domain || `${name}.epicglobal.app`)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-blue-400 hover:text-blue-300 truncate max-w-[220px]"
+                        >
+                          {project.domain || `${name}.epicglobal.app`} <ExternalLink size={10} />
+                        </a>
                         {project.deployType === 'static' ? (
-                          <a
-                            href={'https://' + name + '.epicglobal.app'}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-blue-400 hover:text-blue-300 truncate max-w-[200px]"
-                          >
-                            {name}.epicglobal.app <ExternalLink size={10} />
-                          </a>
+                          null
                         ) : (
                           <>
                             <span>:{project.port}</span>
-                            {project.domain && <span className="truncate max-w-[140px] sm:max-w-none">{project.domain}</span>}
                             <span>{project.health.memory}MB</span>
                             <span className="hidden sm:inline">{project.health.restarts} restarts</span>
                           </>
                         )}
+                        <button
+                          onClick={() => {
+                            setEditingDomain(name);
+                            setDomainValue(project.domain || '');
+                          }}
+                          className="inline-flex items-center gap-1 text-zinc-400 hover:text-zinc-100"
+                        >
+                          <Globe size={12} />
+                          {project.domain ? 'Edit domain' : 'Connect domain'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -822,6 +857,50 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
                     )}
                   </div>
                 </div>
+                {editingDomain === name && (
+                  <form
+                    onSubmit={(event) => { event.preventDefault(); handleUpdateDomain(name); }}
+                    className="px-3 sm:px-4 pb-4 flex flex-wrap items-center gap-2"
+                  >
+                    <label className="text-xs text-zinc-400" htmlFor={`domain-${name}`}>Custom hostname</label>
+                    <input
+                      id={`domain-${name}`}
+                      value={domainValue}
+                      onChange={(event) => setDomainValue(event.target.value)}
+                      placeholder="example.com"
+                      autoComplete="url"
+                      className="min-w-0 flex-1 bg-black border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-400"
+                    />
+                    <button
+                      type="submit"
+                      disabled={actionLoading === 'domain-' + name || !domainValue.trim()}
+                      className="px-2.5 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white text-xs font-medium"
+                    >
+                      {actionLoading === 'domain-' + name ? 'Saving…' : 'Save domain'}
+                    </button>
+                    {project.domain && (
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateDomain(name, '')}
+                        disabled={actionLoading === 'domain-' + name}
+                        className="px-2.5 py-1.5 rounded border border-zinc-700 hover:border-red-700 text-zinc-400 hover:text-red-300 text-xs"
+                      >
+                        Remove domain
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setEditingDomain(null)}
+                      className="p-1.5 text-zinc-500 hover:text-zinc-200"
+                      aria-label="Cancel domain editing"
+                    >
+                      <X size={14} />
+                    </button>
+                    <p className="basis-full text-xs text-zinc-500">
+                      First point an A record at your server&apos;s public IPv4 in your domain provider&apos;s DNS settings. Saving updates EpicGlobal routing without rebuilding this project.
+                    </p>
+                  </form>
+                )}
                 {expandedLogs === name && (
                   <div className="px-3 sm:px-4 pb-4 bg-black">
                     <pre className="text-xs text-zinc-400 font-mono whitespace-pre-wrap h-48 overflow-y-auto p-3 border border-zinc-800 rounded-md">

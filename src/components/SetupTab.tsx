@@ -377,18 +377,15 @@ export function SetupTab() {
               </p>
               {customDomain && (
                 <div className="rounded-lg border border-indigo-900/50 bg-indigo-950/20 p-3 space-y-2">
-                  <p className="text-xs font-medium text-zinc-200">Connect a domain from another provider</p>
+                  <p className="text-xs font-medium text-zinc-200">Connect a domain you already own</p>
                   <ol className="list-decimal pl-4 space-y-1 text-xs text-zinc-400">
                     <li>
-                      In your domain provider&apos;s DNS settings, add an <code className="text-indigo-300">A</code> record for this hostname
-                      (<code className="text-indigo-300">@</code> for the root domain, or the subdomain label) pointing to your EpicGlobal server&apos;s public IPv4 address.
-                      Find that address in your server host&apos;s control panel.
+                      In your domain provider&apos;s DNS settings, add an <code className="text-indigo-300">A</code> record pointing to your EpicGlobal server&apos;s public IPv4 address. Use <code className="text-indigo-300">@</code> for the root domain, or the subdomain label (for example, <code className="text-indigo-300">www</code>). Find the IP in your server host&apos;s control panel.
                     </li>
-                    <li>Enter the same hostname here, such as <code className="text-indigo-300">example.com</code>, then deploy.</li>
+                    <li>Enter the exact hostname here, such as <code className="text-indigo-300">example.com</code>, then click <strong className="text-zinc-300">Review &amp; Deploy</strong> and <strong className="text-zinc-300">Deploy to EpicGlobal</strong>.</li>
                   </ol>
                   <p className="text-xs text-zinc-500">
-                    Keep DNS at your domain provider; EpicGlobal&apos;s DNS Manager only edits domains in its own registry.
-                    Once DNS points to the server, EpicGlobal configures routing and HTTPS automatically.
+                    This is for a new project. To connect a project already deployed, open Projects → Live Projects and select Connect domain; it will not redeploy your project. Keep DNS and renewal with your provider. EpicGlobal configures routing and HTTPS after DNS resolves.
                   </p>
                 </div>
               )}

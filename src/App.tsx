@@ -381,6 +381,7 @@ export default function App() {
                 onNavigateDns={() => handleTabSwitch('domains/dns')}
                 onNavigate={(tab) => handleTabSwitch(`domains/${tab}`)}
                 onNavigateSetup={() => handleTabSwitch('setup')}
+                onNavigateProjects={() => handleTabSwitch('orchestrator/projects')}
               />
             )}
           </div>

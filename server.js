@@ -236,6 +236,17 @@ function normalizeDomain(val) {
     .replace(/\/$/, '');
 }
 
+function isValidProjectDomain(domain) {
+  return typeof domain === 'string'
+    && domain.length <= 253
+    && domain.includes('.')
+    && domain.split('.').every((label) =>
+      label.length > 0
+      && label.length <= 63
+      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
+    );
+}
+
 function validateUrl(url) {
   try {
     const parsed = new URL(url);
@@ -1675,6 +1686,13 @@ app.post('/api/orchestrator/deploy', async (req, res) => {
     });
   }
 
+  if (domain && !isValidProjectDomain(domain)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Enter a valid hostname without a port or path.'
+    });
+  }
+
   if (!repoUrl) {
     return res.status(400).json({
       success: false,
@@ -1792,6 +1810,72 @@ app.get('/api/orchestrator/status', async (req, res) => {
     res.json({ success: true, projects: projects });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Attach or remove a custom domain without redeploying
+// ---------------------------------------------------------
+app.patch('/api/orchestrator/projects/:name/domain', async (req, res) => {
+  const projectName = normalizeProjectName(req.params.name);
+  const domainInput = req.body?.domain;
+
+  if (!projectName || projectName !== req.params.name) {
+    return res.status(400).json({ success: false, error: 'Valid project name required.' });
+  }
+  if (typeof domainInput !== 'string') {
+    return res.status(400).json({ success: false, error: 'Domain must be a hostname or an empty string to remove it.' });
+  }
+  if (activeDeploy || deployQueue.length > 0) {
+    return res.status(409).json({ success: false, error: 'Wait for all deployments to finish before changing domain routing.' });
+  }
+
+  const domain = domainInput.trim().toLowerCase();
+  if (domain && !isValidProjectDomain(domain)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid hostname without https://, a port, or a path.' });
+  }
+
+  const registry = getRegistry();
+  const project = registry.projects[projectName];
+  if (!project) {
+    return res.status(404).json({ success: false, error: 'Project not found.' });
+  }
+  const domainConflictsWithProject = domain && Object.entries(registry.projects).some(([name, entry]) =>
+    name !== projectName && (
+      String(entry.domain || '').toLowerCase() === domain
+      || `${name}.epicglobal.app` === domain
+    )
+  );
+  if (domainConflictsWithProject || ['epicglobal.app', 'www.epicglobal.app', 'api.epicglobal.app'].includes(domain)) {
+    return res.status(409).json({ success: false, error: 'That domain is already connected to another project.' });
+  }
+
+  const previousDomain = project.domain;
+  if (domain) project.domain = domain;
+  else delete project.domain;
+
+  try {
+    fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
+    fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+    await reloadCaddy();
+    return res.json({ success: true, domain: domain || null });
+  } catch (error) {
+    if (previousDomain) project.domain = previousDomain;
+    else delete project.domain;
+
+    try {
+      fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
+      fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
+      await reloadCaddy();
+    } catch (rollbackError) {
+      console.error('[project-domain] Routing update rollback failed:', rollbackError);
+      return res.status(500).json({
+        success: false,
+        error: `Could not update domain routing: ${error.message}. Rollback also failed: ${rollbackError.message}`
+      });
+    }
+
+    return res.status(500).json({ success: false, error: `Could not update domain routing: ${error.message}` });
   }
 });
 
@@ -1956,6 +2040,9 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
 
     if (!projectName) {
       return res.status(400).json({ success: false, error: 'projectName is required.' });
+    }
+    if (domain && !isValidProjectDomain(domain)) {
+      return res.status(400).json({ success: false, error: 'Enter a valid hostname without a port or path.' });
     }
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No file uploaded.' });

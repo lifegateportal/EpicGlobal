@@ -64,7 +64,7 @@ function fmtDate(iso: string): string {
 const emptyRecord = (): Partial<DnsRecord> => ({ type: 'A', name: '@', value: '', ttl: 300 });
 
 // ── Main Component ─────────────────────────────────────────────────────────────
-export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate, onNavigateSetup }: { subTab?: 'search' | 'mydomains' | 'dns'; onNavigateDns?: () => void; onNavigate?: (tab: 'search' | 'mydomains' | 'dns') => void; onNavigateSetup?: () => void }) {
+export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate, onNavigateSetup, onNavigateProjects }: { subTab?: 'search' | 'mydomains' | 'dns'; onNavigateDns?: () => void; onNavigate?: (tab: 'search' | 'mydomains' | 'dns') => void; onNavigateSetup?: () => void; onNavigateProjects?: () => void }) {
 
   // Search state
   const [query, setQuery]           = useState('');
@@ -388,6 +388,16 @@ export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate, onNav
             </button>
           </div>
 
+          <div className="mx-4 mt-4 rounded-lg border border-indigo-900/50 bg-indigo-950/20 p-4 space-y-2">
+            <p className="text-sm font-medium text-zinc-200">Using a domain you bought from another provider?</p>
+            <ol className="list-decimal pl-4 space-y-1 text-xs text-zinc-400">
+              <li>At your domain provider, add an <code className="text-indigo-300">A</code> record pointing to your EpicGlobal server&apos;s public IPv4 address. Use <code className="text-indigo-300">@</code> for the root domain, or the subdomain label (for example, <code className="text-indigo-300">www</code>).</li>
+              <li>For a new project, open <button onClick={onNavigateSetup} className="text-indigo-300 hover:text-indigo-200 underline">New Deploy</button> and choose <strong className="text-zinc-300">Custom</strong> under Domain.</li>
+              <li>For an existing project, open <button onClick={onNavigateProjects} className="text-indigo-300 hover:text-indigo-200 underline">Projects → Live Projects</button>, choose <strong className="text-zinc-300">Connect domain</strong>, and save the same hostname. This does not rebuild or redeploy the project.</li>
+            </ol>
+            <p className="text-xs text-zinc-500">Keep DNS and renewal with your provider. Once the A record resolves, EpicGlobal configures routing and HTTPS. DNS changes may take time to propagate.</p>
+          </div>
+
           <div className="flex-1">
           {loadingDomains ? (
             <div className="flex items-center justify-center py-16 gap-3 text-zinc-500">
@@ -405,16 +415,20 @@ export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate, onNav
                 Search for a domain
               </button>
               <div className="max-w-md mx-auto mt-6 border-t border-zinc-800/60 pt-5">
-                <p className="text-sm font-medium text-zinc-300">Already own a domain elsewhere?</p>
-                <p className="text-xs text-zinc-500 mt-1">
-                  Keep DNS with your domain provider. Add an A record pointing to your EpicGlobal server&apos;s public IPv4, then connect it during project deployment.
-                </p>
-                <button
-                  onClick={onNavigateSetup}
-                  className="mt-3 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-lg transition-colors"
-                >
-                  Connect it to a project
-                </button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <button
+                    onClick={onNavigateSetup}
+                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Deploy a new project
+                  </button>
+                  <button
+                    onClick={onNavigateProjects}
+                    className="px-4 py-2 bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Connect an existing project
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
