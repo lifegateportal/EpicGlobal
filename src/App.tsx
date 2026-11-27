@@ -380,6 +380,7 @@ export default function App() {
                 subTab={domainsSubTab}
                 onNavigateDns={() => handleTabSwitch('domains/dns')}
                 onNavigate={(tab) => handleTabSwitch(`domains/${tab}`)}
+                onNavigateSetup={() => handleTabSwitch('setup')}
               />
             )}
           </div>

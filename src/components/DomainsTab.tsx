@@ -64,7 +64,7 @@ function fmtDate(iso: string): string {
 const emptyRecord = (): Partial<DnsRecord> => ({ type: 'A', name: '@', value: '', ttl: 300 });
 
 // ── Main Component ─────────────────────────────────────────────────────────────
-export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate }: { subTab?: 'search' | 'mydomains' | 'dns'; onNavigateDns?: () => void; onNavigate?: (tab: 'search' | 'mydomains' | 'dns') => void }) {
+export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate, onNavigateSetup }: { subTab?: 'search' | 'mydomains' | 'dns'; onNavigateDns?: () => void; onNavigate?: (tab: 'search' | 'mydomains' | 'dns') => void; onNavigateSetup?: () => void }) {
 
   // Search state
   const [query, setQuery]           = useState('');
@@ -404,6 +404,18 @@ export function DomainsTab({ subTab = 'search', onNavigateDns, onNavigate }: { s
               >
                 Search for a domain
               </button>
+              <div className="max-w-md mx-auto mt-6 border-t border-zinc-800/60 pt-5">
+                <p className="text-sm font-medium text-zinc-300">Already own a domain elsewhere?</p>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Keep DNS with your domain provider. Add an A record pointing to your EpicGlobal server&apos;s public IPv4, then connect it during project deployment.
+                </p>
+                <button
+                  onClick={onNavigateSetup}
+                  className="mt-3 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-lg transition-colors"
+                >
+                  Connect it to a project
+                </button>
+              </div>
             </div>
           ) : (
             <div className="divide-y divide-zinc-800/40">

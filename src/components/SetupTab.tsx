@@ -372,9 +372,26 @@ export function SetupTab() {
               />
               <p className="text-xs text-zinc-600">
                 {customDomain
-                  ? 'Point your DNS A record to your server IP before deploying.'
+                  ? 'Enter the hostname you want to use, without https:// or a path.'
                   : 'Leave blank to auto-generate from project name.'}
               </p>
+              {customDomain && (
+                <div className="rounded-lg border border-indigo-900/50 bg-indigo-950/20 p-3 space-y-2">
+                  <p className="text-xs font-medium text-zinc-200">Connect a domain from another provider</p>
+                  <ol className="list-decimal pl-4 space-y-1 text-xs text-zinc-400">
+                    <li>
+                      In your domain provider&apos;s DNS settings, add an <code className="text-indigo-300">A</code> record for this hostname
+                      (<code className="text-indigo-300">@</code> for the root domain, or the subdomain label) pointing to your EpicGlobal server&apos;s public IPv4 address.
+                      Find that address in your server host&apos;s control panel.
+                    </li>
+                    <li>Enter the same hostname here, such as <code className="text-indigo-300">example.com</code>, then deploy.</li>
+                  </ol>
+                  <p className="text-xs text-zinc-500">
+                    Keep DNS at your domain provider; EpicGlobal&apos;s DNS Manager only edits domains in its own registry.
+                    Once DNS points to the server, EpicGlobal configures routing and HTTPS automatically.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
