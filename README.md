@@ -51,7 +51,9 @@ Each link is limited to one static site. Clients can browse, upload, create, edi
 
 In **Deployments → File Manager**, the host-only assistant opens automatically and can select any registered static website, inspect its files, stage targeted edits or new files, attach image references, and review or undo applied changes. Host assistant responses allow up to 8,192 output tokens and larger file-operation budgets than the client assistant. Selecting **Create a new static website** lets the assistant build a complete site; a non-empty root `index.html` is required, and the website is registered and deployed only after the host approves the staged files. Both assistants return organized plain-text responses without Markdown formatting. In the client portal, the page stays within the screen: the file panel and chat can be switched on mobile, while only the response area scrolls and the message entry remains fixed.
 
-The platform API key is required for all platform APIs and the telemetry socket. It is entered in the owner's Settings page and stored in that browser; do not configure it as a frontend build-time variable.
+Set `ORCHESTRATOR_OWNER_PASSWORD` in the API server's private `.env` file to enable owner sign-in. The dashboard uses an HTTP-only session cookie and loads the server-managed `ORCHESTRATOR_API_KEY` after sign-in; the API key is not persisted in browser storage, so it does not need to be re-entered on each device. The owner password is never embedded in the frontend build. External integrations can continue using `ORCHESTRATOR_API_KEY` directly.
+
+The DeepSeek key saved in **Settings → DeepSeek site assistant** is encrypted in `server-secrets.json` on the API server and is shared by devices that connect to that same server. Keep that file and the generated `SERVER_SECRETS_KEY` in the server's private `.env` backed up together.
 
 Cloudflare Workers static-asset uploads use `wrangler.jsonc`, which points Wrangler at the Vite `dist/` output. If the deployed Worker has a different name, update the `name` field to match it.
 

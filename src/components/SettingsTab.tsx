@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiTopology } from './ApiTopology';
 import { Copy, Eye, EyeOff, Check, Link2, Save } from 'lucide-react';
-import { API, apiFetch, getOrchestratorApiKey, setOrchestratorApiKey } from '../api/client';
+import { API, apiFetch, getOrchestratorApiKey } from '../api/client';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -19,11 +19,6 @@ function CopyButton({ text }: { text: string }) {
 }
 
 export function SettingsTab() {
-  const [showKey, setShowKey] = useState(false);
-  const [keyInput, setKeyInput] = useState(() => getOrchestratorApiKey());
-  const [saved, setSaved] = useState(false);
-  const [keyStatus, setKeyStatus] = useState('');
-  const [verifyingKey, setVerifyingKey] = useState(false);
   const [deepSeekInput, setDeepSeekInput] = useState('');
   const [deepSeekConfigured, setDeepSeekConfigured] = useState(false);
   const [deepSeekMasked, setDeepSeekMasked] = useState('');
@@ -33,9 +28,6 @@ export function SettingsTab() {
   const [showDeepSeekInput, setShowDeepSeekInput] = useState(false);
   const apiUrl = API;
   const activeKey = getOrchestratorApiKey();
-  const maskedKey = activeKey
-    ? activeKey.slice(0, 6) + '••••••••••••••••••••••••••' + activeKey.slice(-4)
-    : '';
 
   useEffect(() => {
     let active = true;
@@ -56,40 +48,6 @@ export function SettingsTab() {
       });
     return () => { active = false; };
   }, []);
-
-  const handleSave = async () => {
-    const candidateKey = keyInput.trim();
-    if (!candidateKey) {
-      setKeyStatus('Enter the server API key first.');
-      return;
-    }
-
-    setVerifyingKey(true);
-    setSaved(false);
-    setKeyStatus('Checking the key against the API server…');
-    try {
-      const response = await fetch(`${apiUrl}/api/orchestrator/status`, {
-        headers: { 'x-api-key': candidateKey },
-        cache: 'no-store',
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        setKeyStatus(response.status === 401
-          ? 'The server rejected this key. Copy the value after ORCHESTRATOR_API_KEY= from the API server’s .env file.'
-          : data.error || `API check failed (HTTP ${response.status}).`);
-        return;
-      }
-
-      setOrchestratorApiKey(candidateKey);
-      setKeyInput(candidateKey);
-      setSaved(true);
-      setKeyStatus(`Key verified. ${Object.keys(data.projects || {}).length} projects are available.`);
-    } catch (error) {
-      setKeyStatus(error instanceof Error ? `Could not reach the API server: ${error.message}` : 'Could not reach the API server.');
-    } finally {
-      setVerifyingKey(false);
-    }
-  };
 
   const saveDeepSeekKey = async () => {
     const candidateKey = deepSeekInput.trim();
@@ -216,37 +174,16 @@ export function SettingsTab() {
             </div>
           </div>
 
-          {/* API Key — editable */}
+          {/* Server-managed API key */}
           <div className="space-y-1.5">
             <label className="text-xs text-zinc-500 uppercase tracking-widest font-semibold">API Key</label>
             <div className="flex items-center gap-2 bg-black border border-zinc-800 rounded-md px-3 py-2.5">
-              <input
-                type={showKey ? 'text' : 'password'}
-                className="flex-1 bg-transparent text-sm text-emerald-300 font-mono outline-none placeholder:text-zinc-600"
-                placeholder="Paste your ORCHESTRATOR_API_KEY here…"
-                value={keyInput}
-                onChange={e => setKeyInput(e.target.value)}
-              />
-              <button onClick={() => setShowKey(v => !v)} className="p-1.5 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors">
-                {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
-              </button>
-              {keyInput && <CopyButton text={keyInput} />}
-              <button
-                onClick={handleSave}
-                disabled={verifyingKey}
-                className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-semibold transition-colors disabled:opacity-50"
-              >
-                {verifyingKey ? <Save size={12} /> : saved ? <Check size={12} className="text-green-300" /> : <Save size={12} />}
-                {verifyingKey ? 'Checking…' : saved ? 'Verified' : 'Verify & Save'}
-              </button>
+              <span className="flex-1 text-sm text-emerald-300 font-mono">
+                {activeKey ? '••••••••••••••••••••••••••' : 'Unavailable'}
+              </span>
+              {activeKey && <CopyButton text={activeKey} />}
             </div>
-            {keyStatus && <p className={`text-xs ${saved ? 'text-green-400' : 'text-amber-400'}`}>{keyStatus}</p>}
-            {!activeKey && (
-              <p className="text-xs text-amber-500/80">Paste your server's <code className="bg-zinc-900 px-1 rounded">ORCHESTRATOR_API_KEY</code> above and click Save.</p>
-            )}
-            {activeKey && (
-              <p className="text-xs text-zinc-600">Active key: <span className="text-zinc-500 font-mono">{maskedKey}</span> — stored in browser localStorage.</p>
-            )}
+            <p className="text-xs text-zinc-600">Managed by the API server and loaded after owner sign-in. It is not saved in this browser.</p>
           </div>
 
           {/* Usage instructions */}

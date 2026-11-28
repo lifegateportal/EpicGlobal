@@ -17,25 +17,20 @@ export const BASE_URL: string = resolveDefaultBaseUrl();
 export const API: string = BASE_URL.replace(/\/$/, '');
 
 const LS_KEY = 'eg_orchestrator_api_key';
+let orchestratorApiKey = '';
 
-/** API key entered by the platform owner and stored in this browser only. */
+/** API key loaded into memory after the owner authenticates with the API server. */
 export function getOrchestratorApiKey(): string {
-  try {
-    return localStorage.getItem(LS_KEY)?.trim() || '';
-  } catch {
-    return '';
-  }
+  return orchestratorApiKey;
 }
 
 export function setOrchestratorApiKey(key: string): void {
-  try {
-    if (key.trim()) localStorage.setItem(LS_KEY, key.trim());
-    else localStorage.removeItem(LS_KEY);
-    window.dispatchEvent(new Event('eg-api-key-updated'));
-  } catch { /* ignore */ }
+  orchestratorApiKey = key.trim();
+  try { localStorage.removeItem(LS_KEY); } catch { /* ignore */ }
+  window.dispatchEvent(new Event('eg-api-key-updated'));
 }
 
-/** @deprecated use getOrchestratorApiKey() for the browser-entered value */
+/** @deprecated use getOrchestratorApiKey() for the authenticated server key */
 export const ORCHESTRATOR_API_KEY = '';
 
 /** Returns headers including the API key for orchestrator fetch calls. */
@@ -54,7 +49,7 @@ export function apiHeaders(extra?: Record<string, string>): Record<string, strin
 export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const key = getOrchestratorApiKey();
   const isProtectedApi = input.includes('/api/') && !input.includes('/api/shared/');
-  if (!isProtectedApi || !key) return fetch(input, init);
+  if (!isProtectedApi) return fetch(input, init);
   const existingHeaders = init?.headers
     ? (init.headers instanceof Headers
         ? Object.fromEntries((init.headers as Headers).entries())
@@ -62,6 +57,7 @@ export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
     : {};
   return fetch(input, {
     ...init,
-    headers: { 'x-api-key': key, ...existingHeaders },
+    credentials: 'include',
+    headers: { ...(key ? { 'x-api-key': key } : {}), ...existingHeaders },
   });
 }

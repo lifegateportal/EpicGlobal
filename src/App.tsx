@@ -14,8 +14,8 @@ import BackendManager from './components/BackendManager';
 import { DomainsTab } from './components/DomainsTab';
 import SharedSitePortal from './components/SharedSitePortal';
 import { useTelemetry } from './hooks/useTelemetry';
+import { API, setOrchestratorApiKey } from './api/client';
 
-const AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
 const ACTIVE_TAB_KEY = 'eg_active_tab';
 const VALID_TABS = new Set([
   'overview',
@@ -26,9 +26,8 @@ const VALID_TABS = new Set([
 ]);
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return sessionStorage.getItem('eg_auth') === 'true';
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [activeTab, setActiveTab] = useState(() => {
@@ -54,6 +53,31 @@ export default function App() {
 
   const { serverConnected, connectionStatusLabel, connectionStatusDetail, performanceData } =
     useTelemetry(isAuthenticated);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/api/auth/session`, { credentials: 'include', cache: 'no-store' })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || `Could not check owner session (HTTP ${response.status}).`);
+        }
+        if (!active) return;
+        if (data.authenticated) {
+          setOrchestratorApiKey(data.apiKey || '');
+          setIsAuthenticated(true);
+        } else if (!data.loginConfigured) {
+          setAuthError('Owner login is not configured. Set ORCHESTRATOR_OWNER_PASSWORD in the API server .env file.');
+        }
+      })
+      .catch(error => {
+        if (active) setAuthError(error instanceof Error ? error.message : 'Could not reach the API server.');
+      })
+      .finally(() => {
+        if (active) setAuthLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
 
   // Local-First Cache Simulation & Focus Throttling
   useEffect(() => {
@@ -129,16 +153,38 @@ export default function App() {
   const sharedRoute = window.location.pathname.match(/^\/shared\/([A-Za-z0-9_-]+)\/?$/);
   if (sharedRoute) return <SharedSitePortal shareId={sharedRoute[1]} />;
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center font-sans text-sm text-zinc-500">
+        Checking secure session…
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
-    const handleAuth = (e: React.FormEvent) => {
+    const handleAuth = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (passwordInput === AUTH_PASSWORD) {
-        sessionStorage.setItem('eg_auth', 'true');
+      setAuthLoading(true);
+      setAuthError('');
+      try {
+        const response = await fetch(`${API}/api/auth/login`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: passwordInput }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          setAuthError(data.error || `Login failed (HTTP ${response.status}).`);
+          setPasswordInput('');
+          return;
+        }
+        setOrchestratorApiKey(data.apiKey || '');
         setIsAuthenticated(true);
-        setAuthError('');
-      } else {
-        setAuthError('Incorrect password.');
-        setPasswordInput('');
+      } catch (error) {
+        setAuthError(error instanceof Error ? error.message : 'Could not reach the API server.');
+      } finally {
+        setAuthLoading(false);
       }
     };
 
@@ -147,19 +193,20 @@ export default function App() {
         <div className="border border-zinc-800/60 bg-[#0A0A0A] p-8 rounded-xl shadow-2xl w-full max-w-sm text-center">
           <div className="w-12 h-12 bg-white text-black flex items-center justify-center rounded-lg font-bold text-2xl tracking-tighter mx-auto mb-6">EG</div>
           <h1 className="text-xl font-medium text-zinc-100 mb-2">EpicGlobal Control</h1>
-          <p className="text-sm text-zinc-500 mb-6">Enter your access password to continue.</p>
+          <p className="text-sm text-zinc-500 mb-6">Enter your owner password to continue.</p>
           <form onSubmit={handleAuth} className="space-y-3">
             <input
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
-              placeholder="Password"
+              placeholder="Owner password"
               autoFocus
+              disabled={authLoading}
               className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600"
             />
             {authError && <p className="text-red-400 text-xs">{authError}</p>}
-            <button type="submit" className="w-full py-2.5 bg-white text-black rounded-md text-sm font-medium hover:bg-zinc-200">
-              <Lock size={14} className="inline mr-2" /> Unlock
+            <button type="submit" disabled={authLoading} className="w-full py-2.5 bg-white text-black rounded-md text-sm font-medium hover:bg-zinc-200 disabled:opacity-50">
+              <Lock size={14} className="inline mr-2" /> {authLoading ? 'Signing in…' : 'Unlock'}
             </button>
           </form>
         </div>
@@ -292,7 +339,11 @@ export default function App() {
         connectionStatusLabel={connectionStatusLabel}
         connectionStatusDetail={connectionStatusDetail}
         onMenuToggle={() => setSidebarOpen(prev => !prev)}
-        onLogout={() => { sessionStorage.removeItem('eg_auth'); setIsAuthenticated(false); }}
+        onLogout={() => {
+          void fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+          setOrchestratorApiKey('');
+          setIsAuthenticated(false);
+        }}
       />
 
       {isOffline && (

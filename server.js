@@ -54,6 +54,12 @@ const DEFAULT_VAULT_MASTER_KEY = 'epicglobal-dev-master-key-change-me';
 const clientShareSessions = new Map();
 const clientShareLoginAttempts = new Map();
 const clientShareChatRequests = new Map();
+const ownerSessions = new Map();
+const ownerLoginAttempts = new Map();
+const OWNER_SESSION_COOKIE = 'eg_owner_session';
+const OWNER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const OWNER_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const OWNER_LOGIN_MAX_ATTEMPTS = 10;
 const pendingClientChanges = new Map();
 const pendingHostChanges = new Map();
 
@@ -67,6 +73,7 @@ let latestTelemetry = {
 };
 
 const app = express();
+app.set('trust proxy', 'loopback');
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -109,6 +116,42 @@ const ORCHESTRATOR_API_KEY = (process.env.ORCHESTRATOR_API_KEY || '').trim() || 
   return generated;
 })();
 
+function getCookieValue(cookieHeader, name) {
+  const cookie = String(cookieHeader || '').split(';').find((part) => part.trim().startsWith(`${name}=`));
+  return cookie ? cookie.trim().slice(name.length + 1) : '';
+}
+
+function isValidOwnerSession(cookieHeader) {
+  const token = getCookieValue(cookieHeader, OWNER_SESSION_COOKIE);
+  if (!token) return false;
+  const expiresAt = ownerSessions.get(token);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    ownerSessions.delete(token);
+    return false;
+  }
+  return true;
+}
+
+function setOwnerSessionCookie(req, res, token, maxAge) {
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.cookie(OWNER_SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure,
+    sameSite: 'strict',
+    path: '/',
+    maxAge
+  });
+}
+
+function isOwnerPasswordValid(password) {
+  const expected = String(process.env.ORCHESTRATOR_OWNER_PASSWORD || '');
+  if (!expected || typeof password !== 'string') return false;
+  const suppliedHash = crypto.createHash('sha256').update(password).digest();
+  const expectedHash = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(suppliedHash, expectedHash);
+}
+
 function requireApiKey(req, res, next) {
   // Client shares use their own password-backed, project-scoped session.
   if (req.originalUrl.split('?')[0].startsWith('/api/shared/')) {
@@ -117,7 +160,7 @@ function requireApiKey(req, res, next) {
 
   const header = req.headers['x-api-key'] || req.headers['authorization'];
   const provided = header ? header.replace(/^Bearer\s+/i, '') : null;
-  if (!provided || provided !== ORCHESTRATOR_API_KEY) {
+  if (provided !== ORCHESTRATOR_API_KEY && !isValidOwnerSession(req.headers.cookie)) {
     return res.status(401).json({ success: false, error: 'Unauthorized: invalid or missing API key.' });
   }
   next();
@@ -136,6 +179,55 @@ function isAllowedClientOrigin(origin) {
     /^https:\/\/.*\.pages\.dev$/.test(origin) ||
     /^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(origin);
 }
+
+app.get('/api/auth/session', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const authenticated = isValidOwnerSession(req.headers.cookie);
+  res.json({
+    success: true,
+    authenticated,
+    loginConfigured: Boolean(String(process.env.ORCHESTRATOR_OWNER_PASSWORD || '').trim()),
+    ...(authenticated ? { apiKey: ORCHESTRATOR_API_KEY } : {})
+  });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!String(process.env.ORCHESTRATOR_OWNER_PASSWORD || '').trim()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Owner login is not configured. Set ORCHESTRATOR_OWNER_PASSWORD in the API server .env file.'
+    });
+  }
+
+  const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const previousAttempts = ownerLoginAttempts.get(clientIp) || [];
+  const recentAttempts = previousAttempts.filter((timestamp) => now - timestamp < OWNER_LOGIN_WINDOW_MS);
+  if (recentAttempts.length >= OWNER_LOGIN_MAX_ATTEMPTS) {
+    ownerLoginAttempts.set(clientIp, recentAttempts);
+    return res.status(429).json({ success: false, error: 'Too many login attempts. Please wait 15 minutes and try again.' });
+  }
+
+  if (!isOwnerPasswordValid(req.body?.password)) {
+    recentAttempts.push(now);
+    ownerLoginAttempts.set(clientIp, recentAttempts);
+    return res.status(401).json({ success: false, error: 'Incorrect owner password.' });
+  }
+
+  ownerLoginAttempts.delete(clientIp);
+  const token = crypto.randomBytes(32).toString('base64url');
+  ownerSessions.set(token, now + OWNER_SESSION_TTL_MS);
+  setOwnerSessionCookie(req, res, token, OWNER_SESSION_TTL_MS);
+  return res.json({ success: true, apiKey: ORCHESTRATOR_API_KEY });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const token = getCookieValue(req.headers.cookie, OWNER_SESSION_COOKIE);
+  if (token) ownerSessions.delete(token);
+  setOwnerSessionCookie(req, res, '', 0);
+  res.json({ success: true });
+});
 
 // Protect every platform API; shared routes enforce their narrower site session.
 app.use('/api/shared', (req, res, next) => {
