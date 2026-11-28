@@ -32,6 +32,7 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
   const [renameValue, setRenameValue] = useState('');
   const [editingDomain, setEditingDomain] = useState<string | null>(null);
   const [domainValue, setDomainValue] = useState('');
+  const [domainAliasesValue, setDomainAliasesValue] = useState('');
   const [expandedFiles, setExpandedFiles] = useState<string | null>(null);
   const [projectFiles, setProjectFiles] = useState<Record<string, string[]>>({});
   const [renamingFile, setRenamingFile] = useState<{ project: string; file: string } | null>(null);
@@ -417,20 +418,27 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
     }
   };
 
-  const handleUpdateDomain = async (projectName: string, nextDomain = domainValue) => {
+  const handleUpdateDomain = async (
+    projectName: string,
+    nextDomain = domainValue,
+    nextAliases = domainAliasesValue.split(/[\n,]/).map((alias) => alias.trim()).filter(Boolean)
+  ) => {
     setActionLoading('domain-' + projectName);
     try {
       const res = await apiFetch(`${API}/api/orchestrator/projects/${encodeURIComponent(projectName)}/domain`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: nextDomain.trim() }),
+        body: JSON.stringify({ domain: nextDomain.trim(), aliases: nextAliases }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         toast.error(data.error || 'Could not update project domain.');
         return;
       }
-      toast.success(data.domain ? `Connected ${data.domain} to ${projectName}.` : `Custom domain removed from ${projectName}.`);
+      const connectedDomains = [data.domain, ...(data.aliases || [])].filter(Boolean);
+      toast.success(connectedDomains.length
+        ? `Connected ${connectedDomains.join(', ')} to ${projectName}.`
+        : `Custom hostnames removed from ${projectName}.`);
       setEditingDomain(null);
       await fetchStatus();
     } catch {
@@ -805,12 +813,24 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
                           onClick={() => {
                             setEditingDomain(name);
                             setDomainValue(project.domain || '');
+                            setDomainAliasesValue((project.domainAliases || []).join('\n'));
                           }}
                           className="inline-flex items-center gap-1 text-zinc-400 hover:text-zinc-100"
                         >
                           <Globe size={12} />
-                          {project.domain ? 'Edit domain' : 'Connect domain'}
+                          {project.domain || project.domainAliases?.length ? 'Edit domains' : 'Connect domain'}
                         </button>
+                        {project.domainAliases?.map((alias) => (
+                          <a
+                            key={alias}
+                            href={`https://${alias}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-zinc-500 hover:text-blue-300 truncate max-w-[220px]"
+                          >
+                            {alias} <ExternalLink size={10} />
+                          </a>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -862,7 +882,7 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
                     onSubmit={(event) => { event.preventDefault(); handleUpdateDomain(name); }}
                     className="px-3 sm:px-4 pb-4 flex flex-wrap items-center gap-2"
                   >
-                    <label className="text-xs text-zinc-400" htmlFor={`domain-${name}`}>Custom hostname</label>
+                    <label className="text-xs text-zinc-400" htmlFor={`domain-${name}`}>Primary custom hostname</label>
                     <input
                       id={`domain-${name}`}
                       value={domainValue}
@@ -871,21 +891,32 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
                       autoComplete="url"
                       className="min-w-0 flex-1 bg-black border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-400"
                     />
+                    <label className="basis-full text-xs text-zinc-400" htmlFor={`domain-aliases-${name}`}>
+                      Additional hostnames
+                    </label>
+                    <textarea
+                      id={`domain-aliases-${name}`}
+                      value={domainAliasesValue}
+                      onChange={(event) => setDomainAliasesValue(event.target.value)}
+                      placeholder={'www.example.com\nshop.example.com'}
+                      rows={2}
+                      className="basis-full bg-black border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-400"
+                    />
                     <button
                       type="submit"
-                      disabled={actionLoading === 'domain-' + name || !domainValue.trim()}
+                      disabled={actionLoading === 'domain-' + name || (!domainValue.trim() && !domainAliasesValue.trim())}
                       className="px-2.5 py-1.5 rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white text-xs font-medium"
                     >
                       {actionLoading === 'domain-' + name ? 'Saving…' : 'Save domain'}
                     </button>
-                    {project.domain && (
+                    {(project.domain || project.domainAliases?.length) && (
                       <button
                         type="button"
-                        onClick={() => handleUpdateDomain(name, '')}
+                        onClick={() => handleUpdateDomain(name, '', [])}
                         disabled={actionLoading === 'domain-' + name}
                         className="px-2.5 py-1.5 rounded border border-zinc-700 hover:border-red-700 text-zinc-400 hover:text-red-300 text-xs"
                       >
-                        Remove domain
+                        Remove hostnames
                       </button>
                     )}
                     <button
@@ -897,7 +928,7 @@ export default function ProjectOrchestrator({ subTab = 'projects' }: { subTab?: 
                       <X size={14} />
                     </button>
                     <p className="basis-full text-xs text-zinc-500">
-                      First point an A record at your server&apos;s public IPv4 in your domain provider&apos;s DNS settings. Saving updates EpicGlobal routing without rebuilding this project.
+                      Point each hostname to this server in your DNS settings. For a www subdomain, use a CNAME to this project&apos;s EpicGlobal hostname. Saving updates routing and HTTPS without rebuilding the project.
                     </p>
                   </form>
                 )}

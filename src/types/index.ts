@@ -12,6 +12,7 @@ export type Project = {
   port: number | null;
   repoUrl: string;
   domain?: string;
+  domainAliases?: string[];
   health: ProjectHealth;
   deployType?: 'static' | 'git';
   staticDir?: string;

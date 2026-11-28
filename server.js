@@ -25,6 +25,12 @@ const unzipper = require('unzipper');
 const { Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 const { collectSiteAnalytics, getAnalyticsLogFilename } = require('./site-analytics');
+const {
+  getProjectHostnames,
+  hasProjectDomainConflict,
+  isValidProjectDomain,
+  normalizeProjectDomainSettings
+} = require('./project-domains');
 
 const execPromise = util.promisify(exec);
 
@@ -333,17 +339,6 @@ function normalizeDomain(val) {
     .toLowerCase()
     .replace(/^https?:\/\//, '')
     .replace(/\/$/, '');
-}
-
-function isValidProjectDomain(domain) {
-  return typeof domain === 'string'
-    && domain.length <= 253
-    && domain.includes('.')
-    && domain.split('.').every((label) =>
-      label.length > 0
-      && label.length <= 63
-      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label)
-    );
 }
 
 function validateUrl(url) {
@@ -1136,9 +1131,7 @@ function buildCaddyConfig(registry) {
   
   Object.entries(registry.projects).forEach(([name, data]) => {
     const upstreamPort = getProjectUpstreamPort(name, data.port);
-    const hostSet = new Set([name + '.epicglobal.app']);
-    if (data.domain) hostSet.add(data.domain);
-    const hosts = Array.from(hostSet);
+    const hosts = getProjectHostnames(name, data);
 
     if (data.deployType === 'static') {
       // Serve static files directly via Caddy (no PM2 process needed)
@@ -1497,6 +1490,7 @@ async function executeOrchestratorDeploy(payload) {
     port: port,
     repoUrl: repoUrl,
     domain: domain || existingProject?.domain || undefined,
+    domainAliases: existingProject?.domainAliases || [],
     ...(sourceDir ? { deployType: 'nexus', managedBy: 'nexus-code-direct' } : {})
   };
   saveRegistry(registry);
@@ -1945,7 +1939,7 @@ app.get('/api/orchestrator/analytics', async (req, res) => {
     const projects = Object.entries(registry.projects).map(([name, project]) => ({
       name,
       domain: project.domain || `${name}.epicglobal.app`,
-      hosts: [...new Set([`${name}.epicglobal.app`, project.domain].filter(Boolean))]
+      hosts: getProjectHostnames(name, project)
     }));
     const analytics = await collectSiteAnalytics(SITE_ANALYTICS_LOG_DIR, projects, days);
     res.setHeader('Cache-Control', 'no-store');
@@ -1969,16 +1963,8 @@ app.patch('/api/orchestrator/projects/:name/domain', async (req, res) => {
   if (!projectName || projectName !== req.params.name) {
     return res.status(400).json({ success: false, error: 'Valid project name required.' });
   }
-  if (typeof domainInput !== 'string') {
-    return res.status(400).json({ success: false, error: 'Domain must be a hostname or an empty string to remove it.' });
-  }
   if (activeDeploy || deployQueue.length > 0) {
     return res.status(409).json({ success: false, error: 'Wait for all deployments to finish before changing domain routing.' });
-  }
-
-  const domain = domainInput.trim().toLowerCase();
-  if (domain && !isValidProjectDomain(domain)) {
-    return res.status(400).json({ success: false, error: 'Enter a valid hostname without https://, a port, or a path.' });
   }
 
   const registry = getRegistry();
@@ -1986,28 +1972,45 @@ app.patch('/api/orchestrator/projects/:name/domain', async (req, res) => {
   if (!project) {
     return res.status(404).json({ success: false, error: 'Project not found.' });
   }
-  const domainConflictsWithProject = domain && Object.entries(registry.projects).some(([name, entry]) =>
-    name !== projectName && (
-      String(entry.domain || '').toLowerCase() === domain
-      || `${name}.epicglobal.app` === domain
-    )
+  const domainSettings = normalizeProjectDomainSettings(
+    projectName,
+    domainInput,
+    req.body?.aliases,
+    project.domainAliases
   );
-  if (domainConflictsWithProject || ['epicglobal.app', 'www.epicglobal.app', 'api.epicglobal.app'].includes(domain)) {
+  if (domainSettings.error) {
+    return res.status(400).json({ success: false, error: domainSettings.error });
+  }
+
+  const requestedDomains = [
+    ...(domainSettings.domain ? [domainSettings.domain] : []),
+    ...domainSettings.aliases
+  ];
+  if (hasProjectDomainConflict(projectName, requestedDomains, registry.projects)) {
     return res.status(409).json({ success: false, error: 'That domain is already connected to another project.' });
   }
 
   const previousDomain = project.domain;
-  if (domain) project.domain = domain;
+  const previousAliases = project.domainAliases;
+  if (domainSettings.domain) project.domain = domainSettings.domain;
   else delete project.domain;
+  if (domainSettings.aliases.length) project.domainAliases = domainSettings.aliases;
+  else delete project.domainAliases;
 
   try {
     fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
     fs.writeFileSync(CADDYFILE_PATH, buildCaddyConfig(registry));
     await reloadCaddy();
-    return res.json({ success: true, domain: domain || null });
+    return res.json({
+      success: true,
+      domain: domainSettings.domain,
+      aliases: domainSettings.aliases
+    });
   } catch (error) {
     if (previousDomain) project.domain = previousDomain;
     else delete project.domain;
+    if (previousAliases) project.domainAliases = previousAliases;
+    else delete project.domainAliases;
 
     try {
       fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
@@ -2249,6 +2252,7 @@ app.post('/api/orchestrator/upload', uploadMiddleware.single('file'), async (req
       repoUrl: null,
       deployType: 'static',
       domain: domain || null,
+      domainAliases: registry.projects[projectName]?.domainAliases || [],
       port: null,
       staticDir: serveDir,
       health: { status: 'online', memory: 0, cpu: 0, restarts: 0 },
