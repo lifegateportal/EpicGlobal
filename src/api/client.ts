@@ -21,12 +21,22 @@ let orchestratorApiKey = '';
 
 /** API key loaded into memory after the owner authenticates with the API server. */
 export function getOrchestratorApiKey(): string {
-  return orchestratorApiKey;
+  if (orchestratorApiKey) return orchestratorApiKey;
+  try {
+    return localStorage.getItem(LS_KEY)?.trim() || '';
+  } catch {
+    return '';
+  }
 }
 
-export function setOrchestratorApiKey(key: string): void {
+export function setOrchestratorApiKey(key: string, persist = false): void {
   orchestratorApiKey = key.trim();
-  try { localStorage.removeItem(LS_KEY); } catch { /* ignore */ }
+  if (persist) {
+    try {
+      if (orchestratorApiKey) localStorage.setItem(LS_KEY, orchestratorApiKey);
+      else localStorage.removeItem(LS_KEY);
+    } catch { /* ignore */ }
+  }
   window.dispatchEvent(new Event('eg-api-key-updated'));
 }
 

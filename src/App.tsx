@@ -16,6 +16,7 @@ import SharedSitePortal from './components/SharedSitePortal';
 import { useTelemetry } from './hooks/useTelemetry';
 import { API, setOrchestratorApiKey } from './api/client';
 
+const LEGACY_AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epicglobal';
 const ACTIVE_TAB_KEY = 'eg_active_tab';
 const VALID_TABS = new Set([
   'overview',
@@ -26,7 +27,9 @@ const VALID_TABS = new Set([
 ]);
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    () => sessionStorage.getItem('eg_auth') === 'true'
+  );
   const [authLoading, setAuthLoading] = useState(true);
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
@@ -175,6 +178,13 @@ export default function App() {
         });
         const data = await response.json();
         if (!response.ok || !data.success) {
+          if (passwordInput === LEGACY_AUTH_PASSWORD) {
+            sessionStorage.setItem('eg_auth', 'true');
+            setIsAuthenticated(true);
+            setAuthError('');
+            setPasswordInput('');
+            return;
+          }
           setAuthError(data.error || `Login failed (HTTP ${response.status}).`);
           setPasswordInput('');
           return;
@@ -182,7 +192,14 @@ export default function App() {
         setOrchestratorApiKey(data.apiKey || '');
         setIsAuthenticated(true);
       } catch (error) {
-        setAuthError(error instanceof Error ? error.message : 'Could not reach the API server.');
+        if (passwordInput === LEGACY_AUTH_PASSWORD) {
+          sessionStorage.setItem('eg_auth', 'true');
+          setIsAuthenticated(true);
+          setAuthError('');
+          setPasswordInput('');
+        } else {
+          setAuthError(error instanceof Error ? error.message : 'Could not reach the API server.');
+        }
       } finally {
         setAuthLoading(false);
       }
@@ -193,13 +210,13 @@ export default function App() {
         <div className="border border-zinc-800/60 bg-[#0A0A0A] p-8 rounded-xl shadow-2xl w-full max-w-sm text-center">
           <div className="w-12 h-12 bg-white text-black flex items-center justify-center rounded-lg font-bold text-2xl tracking-tighter mx-auto mb-6">EG</div>
           <h1 className="text-xl font-medium text-zinc-100 mb-2">EpicGlobal Control</h1>
-          <p className="text-sm text-zinc-500 mb-6">Enter your owner password to continue.</p>
+          <p className="text-sm text-zinc-500 mb-6">Enter your access password to continue.</p>
           <form onSubmit={handleAuth} className="space-y-3">
             <input
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
-              placeholder="Owner password"
+              placeholder="Password"
               autoFocus
               disabled={authLoading}
               className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600"
@@ -341,6 +358,7 @@ export default function App() {
         onMenuToggle={() => setSidebarOpen(prev => !prev)}
         onLogout={() => {
           void fetch(`${API}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+          sessionStorage.removeItem('eg_auth');
           setOrchestratorApiKey('');
           setIsAuthenticated(false);
         }}
