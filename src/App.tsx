@@ -3,6 +3,7 @@ import { Lock, Terminal, LayoutDashboard, Rocket, Clock, KeyRound, FolderOpen, G
 import { Toaster, toast } from 'sonner';
 import { Navbar } from './components/Navbar';
 import { OverviewTab } from './components/OverviewTab';
+import { AnalyticsTab } from './components/AnalyticsTab';
 import { DeploymentsTab } from './components/DeploymentsTab';
 import { SettingsTab } from './components/SettingsTab';
 import { SetupTab } from './components/SetupTab';
@@ -20,6 +21,7 @@ const LEGACY_AUTH_PASSWORD = import.meta.env.VITE_AUTH_PASSWORD?.trim() || 'epic
 const ACTIVE_TAB_KEY = 'eg_active_tab';
 const VALID_TABS = new Set([
   'overview',
+  'analytics',
   'deployments/history', 'deployments/env', 'deployments/files',
   'edge', 'setup', 'settings',
   'orchestrator/projects', 'orchestrator/queue', 'orchestrator/secrets', 'orchestrator/backups', 'orchestrator/monitoring', 'orchestrator/history',
@@ -254,6 +256,7 @@ export default function App() {
   // ── Page titles ────────────────────────────────────────────────────────────
   const pageTitles: Record<string, { title: string; sub: string }> = {
     'overview':                   { title: 'Overview',            sub: 'Your application is live and receiving traffic.' },
+    'analytics':                  { title: 'Website Analytics',   sub: 'Understand how many people visit your hosted websites.' },
     'deployments/history':        { title: 'Deployment History',  sub: 'View and manage all deployment runs.' },
     'deployments/env':            { title: 'Env. Variables',      sub: 'Manage encrypted per-project secrets.' },
     'deployments/files':          { title: 'File Manager',        sub: 'Browse and edit static project files.' },
@@ -386,6 +389,7 @@ export default function App() {
             <SectionLabel label="Navigate" />
             <div className="space-y-0.5">
               <NavItem id="overview" label="Overview" icon={LayoutDashboard} />
+              <NavItem id="analytics" label="Analytics" icon={Activity} />
               <ExpandableGroup
                 id="deployments" label="Deployments" icon={Rocket}
                 isOpen={deploymentsOpen} onToggle={toggleDeployments}
@@ -435,6 +439,7 @@ export default function App() {
             {activeTab === 'overview' && (
               <OverviewTab performanceData={performanceData} serverConnected={serverConnected} connectionStatusDetail={connectionStatusDetail} />
             )}
+            {activeTab === 'analytics' && <AnalyticsTab />}
             {activeTab === 'deployments/history' && <DeploymentsTab subTab="history" />}
             {activeTab === 'deployments/env'     && <DeploymentsTab subTab="env" />}
             {activeTab === 'deployments/files'   && <DeploymentsTab subTab="files" />}

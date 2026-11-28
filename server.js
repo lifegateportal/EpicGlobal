@@ -24,6 +24,7 @@ const multer = require('multer');
 const unzipper = require('unzipper');
 const { Transform } = require('stream');
 const { pipeline } = require('stream/promises');
+const { collectSiteAnalytics, getAnalyticsLogFilename } = require('./site-analytics');
 
 const execPromise = util.promisify(exec);
 
@@ -39,6 +40,9 @@ const CLIENT_HISTORY_ROOT = path.join(process.cwd(), 'client-file-history');
 const BACKUP_ROOT = path.join(process.cwd(), 'orchestrator-backups');
 const CLIENT_SHARES_PATH = path.join(process.cwd(), 'client-shares.json');
 const CADDYFILE_PATH = '/etc/caddy/Caddyfile';
+const SITE_ANALYTICS_LOG_DIR = path.resolve(
+  process.env.SITE_ANALYTICS_LOG_DIR || '/var/log/caddy/epicglobal-analytics'
+);
 const PORT = process.env.PORT || 4000;
 const EPICODESPACE_UPSTREAM_PORT = 8080;
 const CLIENT_SHARE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -286,6 +290,9 @@ async function assertSufficientDeployDiskSpace(requiredKb = 1024 * 1024) {
 }
 
 async function reloadCaddy() {
+  await execPromise(
+    'install -d -m 0750 -o caddy -g caddy ' + quoteForShell(SITE_ANALYTICS_LOG_DIR)
+  );
   // Validate config when caddy CLI is available, then try common service managers.
   await execPromise('if command -v caddy >/dev/null 2>&1; then caddy validate --config ' + quoteForShell(CADDYFILE_PATH) + ' --adapter caddyfile; fi');
 
@@ -1138,16 +1145,35 @@ function buildCaddyConfig(registry) {
       const serveDir = data.staticDir || path.join(DEPLOY_ROOT, name);
       hosts.forEach((host) => {
         // file_server natively serves index.html for directory requests
-        config += '\n' + host + ' {\n  root * ' + serveDir + '\n  file_server\n}\n';
+        config += '\n' + host + ' {\n' +
+          buildCaddyAnalyticsLogConfig(name, host) +
+          '  root * ' + serveDir + '\n' +
+          '  file_server\n' +
+          '}\n';
       });
     } else {
       hosts.forEach((host) => {
-        config += '\n' + host + ' {\n  reverse_proxy localhost:' + upstreamPort + '\n}\n';
+        config += '\n' + host + ' {\n' +
+          buildCaddyAnalyticsLogConfig(name, host) +
+          '  reverse_proxy localhost:' + upstreamPort + '\n' +
+          '}\n';
       });
     }
   });
   
   return config;
+}
+
+function buildCaddyAnalyticsLogConfig(projectName, host) {
+  const logPath = path.join(SITE_ANALYTICS_LOG_DIR, getAnalyticsLogFilename(projectName, host));
+  return '  log {\n' +
+    '    output file ' + JSON.stringify(logPath) + ' {\n' +
+    '      roll_size 100MiB\n' +
+    '      roll_keep 10\n' +
+    '      roll_keep_for 2160h\n' +
+    '    }\n' +
+    '    format json\n' +
+    '  }\n';
 }
 
 function getQueueSnapshot() {
@@ -1902,6 +1928,34 @@ app.get('/api/orchestrator/status', async (req, res) => {
     res.json({ success: true, projects: projects });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ---------------------------------------------------------
+// API: Website Analytics
+// ---------------------------------------------------------
+app.get('/api/orchestrator/analytics', async (req, res) => {
+  const days = req.query.days === undefined ? 30 : Number(req.query.days);
+  if (![7, 30, 90].includes(days)) {
+    return res.status(400).json({ success: false, error: 'Choose an analytics range of 7, 30, or 90 days.' });
+  }
+
+  try {
+    const registry = getRegistry();
+    const projects = Object.entries(registry.projects).map(([name, project]) => ({
+      name,
+      domain: project.domain || `${name}.epicglobal.app`,
+      hosts: [...new Set([`${name}.epicglobal.app`, project.domain].filter(Boolean))]
+    }));
+    const analytics = await collectSiteAnalytics(SITE_ANALYTICS_LOG_DIR, projects, days);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, days, ...analytics });
+  } catch (error) {
+    console.error('[analytics] Could not read website access logs:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Could not read website analytics logs.'
+    });
   }
 });
 
